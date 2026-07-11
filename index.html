@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pegaso - De PC a PC</title>
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons for premium look -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="background-decorations">
+        <div class="glow-orb orb-1"></div>
+        <div class="glow-orb orb-2"></div>
+    </div>
+
+    <main class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo-area">
+                <div class="logo-icon">
+                    <i data-lucide="rocket" class="icon-pegaso"></i>
+                </div>
+                <div>
+                    <h1>PEGASO</h1>
+                    <p class="subtitle">De PC a PC • Conexión Paragua</p>
+                </div>
+            </div>
+            <div class="connection-badge status-offline" id="global-status-badge">
+                <span class="status-dot"></span>
+                <span id="global-status-text">Desconectado</span>
+            </div>
+        </header>
+
+        <!-- Main Grid Layout -->
+        <div class="app-grid">
+            <!-- Left Sidebar: Configuration & Connection -->
+            <section class="sidebar">
+                <!-- ID Card -->
+                <div class="glass-card id-card">
+                    <h3>Tu ID Pegaso</h3>
+                    <div class="id-display-container">
+                        <div class="id-number" id="my-id">Generando...</div>
+                        <button class="icon-btn" id="btn-copy-id" title="Copiar ID">
+                            <i data-lucide="copy"></i>
+                        </button>
+                    </div>
+                    <p class="card-info">Comparte este ID con el otro dispositivo.</p>
+                    
+                    <button class="btn btn-secondary" id="btn-toggle-qr">
+                        <i data-lucide="qr-code"></i> Mostrar Código QR
+                    </button>
+                    
+                    <!-- QR Modal-like container -->
+                    <div class="qr-container hidden" id="qr-wrapper">
+                        <div class="qr-box">
+                            <img id="qr-image" src="" alt="Código QR de Conexión">
+                        </div>
+                        <p class="qr-info">Escanea este código desde tu celular para conectarte rápido.</p>
+                    </div>
+                </div>
+
+                <!-- Connect to Remote Card -->
+                <div class="glass-card connect-card">
+                    <h3>Conectar a otro dispositivo</h3>
+                    <div class="input-group">
+                        <i data-lucide="key-round" class="input-icon"></i>
+                        <input type="text" id="peer-id-input" placeholder="Introduce el ID remoto" maxlength="25">
+                    </div>
+                    <button class="btn btn-primary btn-block" id="btn-connect">
+                        <i data-lucide="zap"></i> Conexión "Paragua"
+                    </button>
+                </div>
+
+                <!-- Active Connection Details -->
+                <div class="glass-card active-connection-card hidden" id="active-connection-panel">
+                    <div class="connection-header">
+                        <i data-lucide="monitor-play" class="conn-icon"></i>
+                        <div>
+                            <h4>Conectado con</h4>
+                            <p class="remote-peer-id" id="connected-peer-name">Ninguno</p>
+                        </div>
+                    </div>
+                    <button class="btn btn-danger btn-block" id="btn-disconnect">
+                        <i data-lucide="power"></i> Desconectar
+                    </button>
+                </div>
+            </section>
+
+            <!-- Right Workspace: Operations & Media -->
+            <section class="workspace">
+                <!-- Tab Menu (Disabled until connected) -->
+                <div class="tabs-container locked" id="workspace-tabs">
+                    <button class="tab-btn active" data-tab="tab-files">
+                        <i data-lucide="folder-open"></i> Transferencia de Archivos
+                    </button>
+                    <button class="tab-btn" data-tab="tab-screen">
+                        <i data-lucide="monitor"></i> Compartir Pantalla
+                    </button>
+                    <div class="tabs-lock-overlay" id="tabs-overlay">
+                        <i data-lucide="lock"></i>
+                        <span>Conéctate a un dispositivo para habilitar las funciones</span>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Files -->
+                <div class="tab-content active" id="tab-files">
+                    <div class="glass-card full-height">
+                        <div class="drop-zone" id="file-drop-zone">
+                            <div class="drop-zone-content">
+                                <i data-lucide="upload-cloud" class="upload-icon"></i>
+                                <h3>Arrastra tus archivos aquí</h3>
+                                <p>O haz clic para explorar tu equipo</p>
+                                <input type="file" id="file-input" class="hidden-file-input" multiple>
+                            </div>
+                        </div>
+
+                        <!-- Transfer Progress Section -->
+                        <div class="transfers-section">
+                            <h3>Transferencias Activas</h3>
+                            <div class="transfers-list" id="transfers-list">
+                                <div class="empty-state" id="no-transfers-msg">
+                                    <i data-lucide="arrow-left-right"></i>
+                                    <p>No hay transferencias activas. Conéctate y envía un archivo para comenzar.</p>
+                                </div>
+                                <!-- Dynamically added transfers will go here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Screen Sharing -->
+                <div class="tab-content" id="tab-screen">
+                    <div class="glass-card full-height screen-workspace">
+                        <div class="screen-controls">
+                            <button class="btn btn-primary" id="btn-share-screen">
+                                <i data-lucide="screen-share"></i> Compartir mi Pantalla
+                            </button>
+                            <button class="btn btn-danger hidden" id="btn-stop-share">
+                                <i data-lucide="screen-share-off"></i> Detener Transmisión
+                            </button>
+                            <span class="screen-status-label" id="screen-status-text">Pantalla inactiva</span>
+                        </div>
+
+                        <div class="video-container">
+                            <div class="video-placeholder" id="video-placeholder">
+                                <i data-lucide="monitor" class="placeholder-icon animate-pulse"></i>
+                                <p>La transmisión de pantalla aparecerá aquí cuando comience.</p>
+                            </div>
+                            <video id="remote-video" autoplay playsinline></video>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Notification Toast -->
+    <div class="toast hidden" id="notification-toast">
+        <i data-lucide="info" class="toast-icon" id="toast-icon"></i>
+        <span class="toast-message" id="toast-message">Mensaje de notificación</span>
+    </div>
+
+    <!-- PeerJS Library -->
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="app.js"></script>
+    <script>
+        // Initialize Lucide Icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>
