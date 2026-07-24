@@ -56,7 +56,10 @@ function initPeer() {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' }
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+                { urls: 'stun:global.stun.twilio.com:3478' }
             ]
         }
     });
@@ -104,10 +107,12 @@ function initPeer() {
         
         call.on('stream', (remoteStream) => {
             showRemoteVideo(remoteStream);
+            switchToScreenTab();
         });
 
         call.on('close', () => {
             hideRemoteVideo();
+            showToast("La transmisión de pantalla ha finalizado.", "info");
         });
         
         call.on('error', (err) => {
@@ -423,6 +428,9 @@ function showRemoteVideo(stream) {
     videoPlaceholder.classList.add('hidden');
     remoteVideo.style.display = 'block';
     remoteVideo.srcObject = stream;
+    remoteVideo.play().catch(err => {
+        console.warn("Autoplay prevenido por navegador:", err);
+    });
     screenStatusText.innerText = "Recibiendo pantalla de la PC remota";
 }
 
@@ -430,6 +438,13 @@ function hideRemoteVideo() {
     remoteVideo.style.display = 'none';
     remoteVideo.srcObject = null;
     videoPlaceholder.classList.remove('hidden');
+}
+
+function switchToScreenTab() {
+    const screenTabBtn = document.querySelector('[data-tab="tab-screen"]');
+    if (screenTabBtn && !screenTabBtn.classList.contains('active')) {
+        screenTabBtn.click();
+    }
 }
 
 // --- UI Helpers & Formatting ---
