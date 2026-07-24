@@ -137,21 +137,44 @@
                 <div class="tab-content" id="tab-screen">
                     <div class="glass-card full-height screen-workspace">
                         <div class="screen-controls">
-                            <button class="btn btn-primary" id="btn-share-screen">
-                                <i data-lucide="screen-share"></i> Compartir mi Pantalla
-                            </button>
-                            <button class="btn btn-danger hidden" id="btn-stop-share">
-                                <i data-lucide="screen-share-off"></i> Detener Transmisión
-                            </button>
-                            <span class="screen-status-label" id="screen-status-text">Pantalla inactiva</span>
+                            <div class="screen-controls-group">
+                                <button class="btn btn-primary" id="btn-share-screen">
+                                    <i data-lucide="screen-share"></i> Compartir mi Pantalla
+                                </button>
+                                <button class="btn btn-danger hidden" id="btn-stop-share">
+                                    <i data-lucide="screen-share-off"></i> Detener Transmisión
+                                </button>
+                                <button class="btn btn-secondary hidden" id="btn-toggle-control">
+                                    <i data-lucide="mouse-pointer"></i> <span id="control-btn-label">Activar Control Remoto</span>
+                                </button>
+                                <button class="btn btn-secondary hidden" id="btn-toggle-fullscreen" title="Ampliar pantalla a modo completo">
+                                    <i data-lucide="maximize"></i> <span id="fullscreen-btn-label">Pantalla Completa</span>
+                                </button>
+                            </div>
+                            <div class="screen-status-container">
+                                <span class="screen-status-label" id="screen-status-text">Pantalla inactiva</span>
+                                <span class="control-badge hidden" id="control-badge">Control Activo</span>
+                            </div>
                         </div>
 
-                        <div class="video-container">
+                        <div class="video-container" id="video-container">
+                            <!-- Floating fullscreen exit control bar -->
+                            <div class="fullscreen-overlay-bar hidden" id="fullscreen-overlay-bar">
+                                <span class="fs-title"><i data-lucide="monitor"></i> Modo Pantalla Completa</span>
+                                <button class="btn btn-secondary btn-sm" id="btn-exit-fullscreen">
+                                    <i data-lucide="minimize"></i> Salir
+                                </button>
+                            </div>
+
                             <div class="video-placeholder" id="video-placeholder">
                                 <i data-lucide="monitor" class="placeholder-icon animate-pulse"></i>
                                 <p>La transmisión de pantalla aparecerá aquí cuando comience.</p>
                             </div>
-                            <video id="remote-video" autoplay playsinline></video>
+                            <video id="remote-video" autoplay playsinline tabindex="0" title="Doble clic para pantalla completa"></video>
+                            <div class="remote-cursor hidden" id="remote-cursor">
+                                <i data-lucide="mouse-pointer" class="cursor-icon"></i>
+                                <span class="cursor-label" id="remote-cursor-label">Remoto</span>
+                            </div>
                         </div>
                     </div>
                 </div>
