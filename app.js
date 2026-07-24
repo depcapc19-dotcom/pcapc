@@ -35,6 +35,17 @@ const toastEl = document.getElementById('notification-toast');
 const toastIcon = document.getElementById('toast-icon');
 const toastMessage = document.getElementById('toast-message');
 
+// Remote Control & Fullscreen Elements & State
+const btnToggleControl = document.getElementById('btn-toggle-control');
+const controlBtnLabel = document.getElementById('control-btn-label');
+const controlBadge = document.getElementById('control-badge');
+const remoteCursor = document.getElementById('remote-cursor');
+const videoContainer = document.getElementById('video-container');
+const btnToggleFullscreen = document.getElementById('btn-toggle-fullscreen');
+const btnExitFullscreen = document.getElementById('btn-exit-fullscreen');
+const fullscreenOverlayBar = document.getElementById('fullscreen-overlay-bar');
+let isRemoteControlActive = false;
+
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
     initPeer();
@@ -275,6 +286,24 @@ function handleIncomingData(msg) {
             delete activeTransfers[msg.transferId];
             break;
 
+        case 'remote-control-status':
+            if (msg.active) {
+                showToast("El dispositivo remoto ha activado el control sobre tu pantalla.", "info");
+                if (controlBadge) {
+                    controlBadge.innerText = "Siendo Controlado";
+                    controlBadge.classList.remove('hidden');
+                }
+            } else {
+                showToast("El control remoto ha sido desactivado.", "info");
+                if (controlBadge) controlBadge.classList.add('hidden');
+                if (remoteCursor) remoteCursor.classList.add('hidden');
+            }
+            break;
+
+        case 'remote-control':
+            handleIncomingRemoteControl(msg);
+            break;
+
         default:
             console.log("Mensaje desconocido recibido:", msg);
     }
@@ -432,18 +461,142 @@ function showRemoteVideo(stream) {
         console.warn("Autoplay prevenido por navegador:", err);
     });
     screenStatusText.innerText = "Recibiendo pantalla de la PC remota";
+    
+    // Show remote control and fullscreen buttons for viewer
+    if (btnToggleControl) btnToggleControl.classList.remove('hidden');
+    if (btnToggleFullscreen) btnToggleFullscreen.classList.remove('hidden');
 }
 
 function hideRemoteVideo() {
     remoteVideo.style.display = 'none';
     remoteVideo.srcObject = null;
     videoPlaceholder.classList.remove('hidden');
+    
+    if (btnToggleControl) btnToggleControl.classList.add('hidden');
+    if (btnToggleFullscreen) btnToggleFullscreen.classList.add('hidden');
+    if (isRemoteControlActive) {
+        toggleRemoteControl();
+    }
+    if (remoteCursor) {
+        remoteCursor.classList.add('hidden');
+    }
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+        toggleFullscreen();
+    }
 }
 
 function switchToScreenTab() {
     const screenTabBtn = document.querySelector('[data-tab="tab-screen"]');
     if (screenTabBtn && !screenTabBtn.classList.contains('active')) {
         screenTabBtn.click();
+    }
+}
+
+// --- Fullscreen Toggle Logic ---
+function toggleFullscreen() {
+    if (!videoContainer) return;
+
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        if (videoContainer.requestFullscreen) {
+            videoContainer.requestFullscreen();
+        } else if (videoContainer.webkitRequestFullscreen) {
+            videoContainer.webkitRequestFullscreen();
+        } else if (videoContainer.msRequestFullscreen) {
+            videoContainer.msRequestFullscreen();
+        }
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+        }
+    }
+}
+
+function handleFullscreenChange() {
+    const isFS = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+    if (isFS) {
+        if (fullscreenOverlayBar) fullscreenOverlayBar.classList.remove('hidden');
+        showToast("Modo pantalla completa activado. Presiona ESC para salir.", "info");
+    } else {
+        if (fullscreenOverlayBar) fullscreenOverlayBar.classList.add('hidden');
+    }
+}
+
+// --- Remote Control Functions ---
+function toggleRemoteControl() {
+    isRemoteControlActive = !isRemoteControlActive;
+    if (isRemoteControlActive) {
+        remoteVideo.classList.add('remote-control-active');
+        if (controlBtnLabel) controlBtnLabel.innerText = "Desactivar Control";
+        if (controlBadge) {
+            controlBadge.innerText = "Control Activo";
+            controlBadge.classList.remove('hidden');
+        }
+        remoteVideo.focus();
+        showToast("Control remoto activado. Interactúa sobre el video para enviar clicks y teclas.", "success");
+    } else {
+        remoteVideo.classList.remove('remote-control-active');
+        if (controlBtnLabel) controlBtnLabel.innerText = "Activar Control Remoto";
+        if (controlBadge) controlBadge.classList.add('hidden');
+        showToast("Control remoto desactivado.", "info");
+    }
+
+    if (activeConnection) {
+        activeConnection.send({
+            type: 'remote-control-status',
+            active: isRemoteControlActive
+        });
+    }
+}
+
+function sendRemoteMouseEvent(e, action) {
+    if (!isRemoteControlActive || !activeConnection) return;
+    const rect = remoteVideo.getBoundingClientRect();
+    const xPct = (e.clientX - rect.left) / rect.width;
+    const yPct = (e.clientY - rect.top) / rect.height;
+
+    if (xPct < 0 || xPct > 1 || yPct < 0 || yPct > 1) return;
+
+    activeConnection.send({
+        type: 'remote-control',
+        action: action,
+        xPct: parseFloat(xPct.toFixed(4)),
+        yPct: parseFloat(yPct.toFixed(4)),
+        button: e.button
+    });
+}
+
+function sendRemoteKeyEvent(e, action) {
+    if (!isRemoteControlActive || !activeConnection) return;
+    activeConnection.send({
+        type: 'remote-control',
+        action: action,
+        key: e.key,
+        code: e.code,
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey
+    });
+}
+
+function handleIncomingRemoteControl(msg) {
+    if (msg.action === 'mousemove' || msg.action === 'mousedown' || msg.action === 'mouseup' || msg.action === 'click') {
+        if (remoteCursor && videoContainer) {
+            remoteCursor.classList.remove('hidden');
+            const containerRect = videoContainer.getBoundingClientRect();
+            const leftPx = msg.xPct * containerRect.width;
+            const topPx = msg.yPct * containerRect.height;
+            remoteCursor.style.left = `${leftPx}px`;
+            remoteCursor.style.top = `${topPx}px`;
+        }
+    }
+    
+    // Bridge for native OS Agent if present (Electron / Node agent bridge)
+    if (window.pegasoDesktopAgent && typeof window.pegasoDesktopAgent.executeCommand === 'function') {
+        window.pegasoDesktopAgent.executeCommand(msg);
     }
 }
 
@@ -643,9 +796,37 @@ function setupUI() {
     // Disconnect button click
     btnDisconnect.addEventListener('click', disconnectAll);
 
-    // Screen Share button events
+    // Screen Share & Remote Control button events
     btnShareScreen.addEventListener('click', startScreenShare);
     btnStopShare.addEventListener('click', stopScreenShare);
+    if (btnToggleControl) {
+        btnToggleControl.addEventListener('click', toggleRemoteControl);
+    }
+    if (btnToggleFullscreen) {
+        btnToggleFullscreen.addEventListener('click', toggleFullscreen);
+    }
+    if (btnExitFullscreen) {
+        btnExitFullscreen.addEventListener('click', toggleFullscreen);
+    }
+
+    // Listen for fullscreen change state
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+    // Remote Control & Fullscreen input listeners on video element
+    if (remoteVideo) {
+        remoteVideo.addEventListener('mousemove', (e) => sendRemoteMouseEvent(e, 'mousemove'));
+        remoteVideo.addEventListener('mousedown', (e) => sendRemoteMouseEvent(e, 'mousedown'));
+        remoteVideo.addEventListener('mouseup', (e) => sendRemoteMouseEvent(e, 'mouseup'));
+        remoteVideo.addEventListener('click', (e) => sendRemoteMouseEvent(e, 'click'));
+        remoteVideo.addEventListener('dblclick', toggleFullscreen);
+        remoteVideo.addEventListener('contextmenu', (e) => {
+            if (isRemoteControlActive) e.preventDefault();
+            sendRemoteMouseEvent(e, 'contextmenu');
+        });
+        remoteVideo.addEventListener('keydown', (e) => sendRemoteKeyEvent(e, 'keydown'));
+        remoteVideo.addEventListener('keyup', (e) => sendRemoteKeyEvent(e, 'keyup'));
+    }
 
     // Drag and Drop files zone events
     fileDropZone.addEventListener('click', () => {
