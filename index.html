@@ -126,7 +126,10 @@
                         <i data-lucide="monitor"></i> Control Remoto
                     </button>
                     <button class="tab-btn" data-tab="tab-explorer">
-                        <i data-lucide="folder-tree"></i> Archivos Remotos (AnyDesk)
+                        <i data-lucide="folder-tree"></i> Archivos Remotos
+                    </button>
+                    <button class="tab-btn" data-tab="tab-terminal">
+                        <i data-lucide="terminal"></i> Terminal Remota
                     </button>
                     <button class="tab-btn" data-tab="tab-files">
                         <i data-lucide="send"></i> Envío P2P
@@ -154,13 +157,44 @@
                                 <button class="btn btn-secondary hidden" id="btn-toggle-fullscreen" title="Ampliar pantalla a modo completo">
                                     <i data-lucide="maximize"></i> <span id="fullscreen-btn-label">Pantalla Completa</span>
                                 </button>
+                                <!-- Super Features -->
+                                <button class="btn btn-secondary hidden" id="btn-toggle-voice" title="Llamada de voz directa">
+                                    <i data-lucide="mic"></i> <span id="voice-btn-label">Voz</span>
+                                </button>
+                                <button class="btn btn-secondary hidden" id="btn-toggle-record" title="Grabar sesión de pantalla">
+                                    <i data-lucide="disc"></i> <span id="record-btn-label">Grabar</span>
+                                </button>
+                                <button class="btn btn-secondary hidden" id="btn-toggle-whiteboard" title="Pizarra de anotaciones remota">
+                                    <i data-lucide="pen-tool"></i> <span id="whiteboard-btn-label">Pizarra</span>
+                                </button>
                             </div>
                             <div class="screen-status-container">
                                 <span class="screen-status-label" id="screen-status-text">Pantalla inactiva</span>
                                 <span class="control-badge hidden" id="control-badge">Control Activo</span>
+                                <span class="recording-badge hidden" id="recording-badge"><span class="rec-dot"></span> Grabando</span>
+                                <span class="voice-badge hidden" id="voice-badge"><i data-lucide="mic"></i> Voz Activa</span>
                             </div>
                         </div>
-                        <p class="card-info remote-os-hint" style="margin-top: -6px; font-size: 11px;">
+
+                        <!-- Quick Action Toolbar (Atajos Rápidos de Sistema AnyDesk Superior) -->
+                        <div class="quick-actions-toolbar hidden" id="quick-actions-toolbar">
+                            <span class="qa-title"><i data-lucide="zap" class="small-header-icon"></i> Atajos de Sistema:</span>
+                            <button class="qa-btn" id="qa-ctrl-alt-del" title="Enviar Ctrl + Alt + Del"><i data-lucide="shield"></i> TaskMgr / CAD</button>
+                            <button class="qa-btn" id="qa-lock" title="Bloquear Estación Remota"><i data-lucide="lock"></i> Bloquear (Win+L)</button>
+                            <button class="qa-btn" id="qa-desktop" title="Mostrar Escritorio"><i data-lucide="layout"></i> Escritorio (Win+D)</button>
+                            <button class="qa-btn" id="qa-start" title="Menú Inicio"><i data-lucide="command"></i> Inicio</button>
+                            <button class="qa-btn" id="qa-clipboard" title="Sincronizar Texto del Portapapeles"><i data-lucide="clipboard-copy"></i> Portapapeles</button>
+                        </div>
+
+                        <!-- Floating Whiteboard Toolbar -->
+                        <div class="whiteboard-tools-bar hidden" id="whiteboard-tools-bar">
+                            <button class="wb-tool-btn active" data-tool="pen" title="Lápiz"><i data-lucide="edit-2"></i></button>
+                            <button class="wb-tool-btn" data-tool="highlighter" title="Resaltador"><i data-lucide="highlighter"></i></button>
+                            <input type="color" id="wb-color-picker" value="#ff3366" title="Color de Trazo">
+                            <button class="wb-tool-btn" id="wb-clear" title="Limpiar Pizarra"><i data-lucide="trash"></i></button>
+                        </div>
+
+                        <p class="card-info remote-os-hint" style="margin-top: -4px; font-size: 11px;">
                             <i data-lucide="shield-alert" style="width: 13px; height: 13px; vertical-align: middle;"></i> 
                             Para mover mouse/teclado real y explorar archivos, ejecuta <strong>iniciar-control-windows.bat</strong> en la PC remota.
                         </p>
@@ -179,6 +213,10 @@
                                 <p>La transmisión de pantalla aparecerá aquí cuando comience.</p>
                             </div>
                             <video id="remote-video" autoplay playsinline tabindex="0" title="Haz clic para enfocar teclado. Doble clic para pantalla completa"></video>
+
+                            <!-- Whiteboard Canvas Layer -->
+                            <canvas id="whiteboard-canvas" class="whiteboard-canvas pointer-none"></canvas>
+
                             <div class="remote-cursor hidden" id="remote-cursor">
                                 <i data-lucide="mouse-pointer" class="cursor-icon"></i>
                                 <span class="cursor-label" id="remote-cursor-label">Remoto</span>
@@ -238,6 +276,38 @@
                                     </tr>
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Remote Terminal (PowerShell / CMD) -->
+                <div class="tab-content" id="tab-terminal">
+                    <div class="glass-card full-height terminal-workspace">
+                        <div class="terminal-header">
+                            <div class="terminal-title">
+                                <i data-lucide="terminal" class="term-icon"></i>
+                                <div>
+                                    <h4>Consola Remota Administradora</h4>
+                                    <p>Ejecuta comandos nativos en la PC remota sin interrumpir al usuario</p>
+                                </div>
+                            </div>
+                            <div class="terminal-shell-selector">
+                                <label><input type="radio" name="term-shell" value="powershell" checked> PowerShell</label>
+                                <label><input type="radio" name="term-shell" value="cmd"> CMD</label>
+                                <button class="btn btn-secondary btn-sm" id="btn-clear-terminal"><i data-lucide="trash-2"></i> Limpiar</button>
+                            </div>
+                        </div>
+
+                        <div class="terminal-screen" id="terminal-screen">
+                            <div class="terminal-output" id="terminal-output">
+                                <div class="term-line term-sys">PEGASO Terminal Remota v2.0 - Conectado nativamente con Windows</div>
+                                <div class="term-line term-sys">Escribe un comando a continuación (ej: Get-Process, ipconfig, sfc /scannow)...</div>
+                            </div>
+                            <div class="terminal-input-line">
+                                <span class="term-prompt">PS&gt;</span>
+                                <input type="text" id="terminal-input" placeholder="Escribe comando y presiona Enter..." autocomplete="off">
+                                <button class="btn btn-primary btn-sm" id="btn-send-command"><i data-lucide="send"></i> Ejecutar</button>
+                            </div>
                         </div>
                     </div>
                 </div>
