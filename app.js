@@ -48,6 +48,31 @@ const btnExitFullscreen = document.getElementById('btn-exit-fullscreen');
 const fullscreenOverlayBar = document.getElementById('fullscreen-overlay-bar');
 let isRemoteControlActive = false;
 
+// Super Features Elements & State (Voice, Recording, Whiteboard, Terminal, QuickActions)
+const btnToggleVoice = document.getElementById('btn-toggle-voice');
+const btnToggleRecord = document.getElementById('btn-toggle-record');
+const btnToggleWhiteboard = document.getElementById('btn-toggle-whiteboard');
+const voiceBadge = document.getElementById('voice-badge');
+const recordingBadge = document.getElementById('recording-badge');
+const quickActionsToolbar = document.getElementById('quick-actions-toolbar');
+const whiteboardToolsBar = document.getElementById('whiteboard-tools-bar');
+const wbCanvas = document.getElementById('whiteboard-canvas');
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let isRecording = false;
+
+let voiceStream = null;
+let voiceCall = null;
+let isVoiceActive = false;
+
+let isWhiteboardActive = false;
+let wbCtx = null;
+let wbTool = 'pen';
+let wbColor = '#ff3366';
+let isWbDrawing = false;
+let lastWbPos = { x: 0, y: 0 };
+
 // Saved Devices & History Elements
 const savedDevicesList = document.getElementById('saved-devices-list');
 const emptySavedMsg = document.getElementById('empty-saved-msg');
@@ -261,6 +286,14 @@ function handleIncomingData(msg) {
 
         case 'remote-control':
             handleIncomingRemoteControl(msg);
+            break;
+
+        case 'draw-event':
+            renderRemoteDrawEvent(msg);
+            break;
+
+        case 'clear-whiteboard':
+            clearWhiteboardCanvas(false);
             break;
 
         // Remote Explorer RPC Handling (Host Side)
@@ -806,6 +839,10 @@ function showRemoteVideo(stream) {
     
     if (btnToggleControl) btnToggleControl.classList.remove('hidden');
     if (btnToggleFullscreen) btnToggleFullscreen.classList.remove('hidden');
+    if (btnToggleVoice) btnToggleVoice.classList.remove('hidden');
+    if (btnToggleRecord) btnToggleRecord.classList.remove('hidden');
+    if (btnToggleWhiteboard) btnToggleWhiteboard.classList.remove('hidden');
+    if (quickActionsToolbar) quickActionsToolbar.classList.remove('hidden');
 }
 
 function hideRemoteVideo() {
@@ -815,6 +852,11 @@ function hideRemoteVideo() {
     
     if (btnToggleControl) btnToggleControl.classList.add('hidden');
     if (btnToggleFullscreen) btnToggleFullscreen.classList.add('hidden');
+    if (btnToggleVoice) btnToggleVoice.classList.add('hidden');
+    if (btnToggleRecord) btnToggleRecord.classList.add('hidden');
+    if (btnToggleWhiteboard) btnToggleWhiteboard.classList.add('hidden');
+    if (quickActionsToolbar) quickActionsToolbar.classList.add('hidden');
+    if (whiteboardToolsBar) whiteboardToolsBar.classList.add('hidden');
     if (isRemoteControlActive) toggleRemoteControl();
     if (remoteCursor) remoteCursor.classList.add('hidden');
 }
@@ -922,6 +964,316 @@ function handleFullscreenChange() {
     } else {
         if (fullscreenOverlayBar) fullscreenOverlayBar.classList.add('hidden');
     }
+}
+
+// --- Super Features: Quick Actions, Session Recording, Voice Chat, Whiteboard & Terminal ---
+
+// 1. Quick Actions System Shortcuts
+async function sendQuickAction(cmd) {
+    if (!activeConnection) {
+        showToast("Conéctate a un dispositivo remoto primero.", "error");
+        return;
+    }
+    showToast(`Ejecutando atajo remoto: ${cmd}...`, "info");
+    const res = await sendExplorerRPC('/system/action', { cmd: cmd });
+    if (res.error || (res.data && res.data.error)) {
+        showToast(res.error || res.data.error, "error");
+    } else {
+        showToast((res.data && res.data.message) || "Atajo ejecutado correctamente", "success");
+    }
+}
+
+async function syncClipboard() {
+    if (!activeConnection) return;
+    const textToCopy = prompt("Escribe o pega el texto que deseas enviar al portapapeles de la PC remota:");
+    if (textToCopy !== null && textToCopy.trim()) {
+        const res = await sendExplorerRPC('/system/clipboard', { action: 'set', text: textToCopy.trim() });
+        if (res.data && res.data.status === 'success') {
+            showToast("Texto enviado al portapapeles remoto", "success");
+        } else {
+            showToast("Error al enviar a portapapeles", "error");
+        }
+    }
+}
+
+// 2. Session Recording (MediaRecorder API)
+function toggleSessionRecording() {
+    const stream = remoteVideo.srcObject || localStream;
+    if (!stream) {
+        showToast("No hay flujo de video activo para grabar.", "error");
+        return;
+    }
+
+    if (!isRecording) {
+        try {
+            recordedChunks = [];
+            let options = { mimeType: 'video/webm;codecs=vp9' };
+            try { mediaRecorder = new MediaRecorder(stream, options); }
+            catch (e) { mediaRecorder = new MediaRecorder(stream); }
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const dateStr = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+                triggerFileDownload(blob, `pegaso-sesion-${dateStr}.webm`);
+                showToast("Grabación guardada correctamente en tu equipo", "success");
+            };
+
+            mediaRecorder.start(1000);
+            isRecording = true;
+            if (recordingBadge) recordingBadge.classList.remove('hidden');
+            const recBtnLabel = document.getElementById('record-btn-label');
+            if (recBtnLabel) recBtnLabel.innerText = "Detener Rec";
+            showToast("Grabación de sesión iniciada", "success");
+        } catch (err) {
+            showToast("Error al iniciar grabación: " + err.message, "error");
+        }
+    } else {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+        }
+        isRecording = false;
+        if (recordingBadge) recordingBadge.classList.add('hidden');
+        const recBtnLabel = document.getElementById('record-btn-label');
+        if (recBtnLabel) recBtnLabel.innerText = "Grabar";
+    }
+}
+
+// 3. Live Voice Call (WebRTC Audio Chat)
+async function toggleVoiceCall() {
+    if (!activeConnection) {
+        showToast("Conéctate a un dispositivo para iniciar voz.", "error");
+        return;
+    }
+
+    if (!isVoiceActive) {
+        try {
+            voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            voiceCall = peer.call(activeConnection.peer, voiceStream, { metadata: { type: 'voice' } });
+            
+            voiceCall.on('stream', (remoteVoiceStream) => {
+                const audio = new Audio();
+                audio.srcObject = remoteVoiceStream;
+                audio.play();
+                if (voiceBadge) voiceBadge.classList.remove('hidden');
+                showToast("Llamada de voz establecida", "success");
+            });
+
+            voiceCall.on('close', () => {
+                if (voiceBadge) voiceBadge.classList.add('hidden');
+                isVoiceActive = false;
+            });
+
+            isVoiceActive = true;
+            if (voiceBadge) voiceBadge.classList.remove('hidden');
+            const voiceBtnLabel = document.getElementById('voice-btn-label');
+            if (voiceBtnLabel) voiceBtnLabel.innerText = "Cortar Voz";
+        } catch (err) {
+            showToast("No se pudo acceder al micrófono: " + err.message, "error");
+        }
+    } else {
+        if (voiceCall) voiceCall.close();
+        if (voiceStream) {
+            voiceStream.getTracks().forEach(t => t.stop());
+            voiceStream = null;
+        }
+        isVoiceActive = false;
+        if (voiceBadge) voiceBadge.classList.add('hidden');
+        const voiceBtnLabel = document.getElementById('voice-btn-label');
+        if (voiceBtnLabel) voiceBtnLabel.innerText = "Voz";
+        showToast("Llamada de voz finalizada", "info");
+    }
+}
+
+// 4. Interactive Whiteboard (Remote Draw Sync)
+function initWhiteboard() {
+    if (!wbCanvas) return;
+    wbCtx = wbCanvas.getContext('2d');
+    resizeWbCanvas();
+    window.addEventListener('resize', resizeWbCanvas);
+
+    wbCanvas.addEventListener('mousedown', (e) => {
+        if (!isWhiteboardActive) return;
+        isWbDrawing = true;
+        const rect = wbCanvas.getBoundingClientRect();
+        lastWbPos = {
+            x: (e.clientX - rect.left) / rect.width,
+            y: (e.clientY - rect.top) / rect.height
+        };
+    });
+
+    wbCanvas.addEventListener('mousemove', (e) => {
+        if (!isWhiteboardActive || !isWbDrawing) return;
+        const rect = wbCanvas.getBoundingClientRect();
+        const curPos = {
+            x: (e.clientX - rect.left) / rect.width,
+            y: (e.clientY - rect.top) / rect.height
+        };
+
+        drawWbLine(lastWbPos, curPos, wbTool, wbColor, true);
+        lastWbPos = curPos;
+    });
+
+    wbCanvas.addEventListener('mouseup', () => isWbDrawing = false);
+    wbCanvas.addEventListener('mouseleave', () => isWbDrawing = false);
+}
+
+function resizeWbCanvas() {
+    if (!wbCanvas || !videoContainer) return;
+    const rect = videoContainer.getBoundingClientRect();
+    wbCanvas.width = rect.width || 800;
+    wbCanvas.height = rect.height || 450;
+}
+
+function toggleWhiteboard() {
+    isWhiteboardActive = !isWhiteboardActive;
+    if (isWhiteboardActive) {
+        resizeWbCanvas();
+        wbCanvas.classList.remove('pointer-none');
+        wbCanvas.classList.add('pointer-auto');
+        if (whiteboardToolsBar) whiteboardToolsBar.classList.remove('hidden');
+        showToast("Pizarra activada. Dibuja sobre la pantalla.", "info");
+    } else {
+        wbCanvas.classList.remove('pointer-auto');
+        wbCanvas.classList.add('pointer-none');
+        if (whiteboardToolsBar) whiteboardToolsBar.classList.add('hidden');
+        showToast("Pizarra desactivada.", "info");
+    }
+}
+
+function drawWbLine(start, end, tool, color, emit = false) {
+    if (!wbCtx || !wbCanvas) return;
+    const w = wbCanvas.width;
+    const h = wbCanvas.height;
+
+    wbCtx.beginPath();
+    wbCtx.moveTo(start.x * w, start.y * h);
+    wbCtx.lineTo(end.x * w, end.y * h);
+    
+    if (tool === 'highlighter') {
+        wbCtx.strokeStyle = color;
+        wbCtx.globalAlpha = 0.4;
+        wbCtx.lineWidth = 14;
+        wbCtx.lineCap = 'square';
+    } else {
+        wbCtx.strokeStyle = color;
+        wbCtx.globalAlpha = 1.0;
+        wbCtx.lineWidth = 4;
+        wbCtx.lineCap = 'round';
+    }
+
+    wbCtx.stroke();
+    wbCtx.globalAlpha = 1.0;
+
+    if (emit && activeConnection) {
+        activeConnection.send({
+            type: 'draw-event',
+            start: start,
+            end: end,
+            tool: tool,
+            color: color
+        });
+    }
+}
+
+function clearWhiteboardCanvas(emit = false) {
+    if (!wbCtx || !wbCanvas) return;
+    wbCtx.clearRect(0, 0, wbCanvas.width, wbCanvas.height);
+    if (emit && activeConnection) {
+        activeConnection.send({ type: 'clear-whiteboard' });
+    }
+}
+
+function renderRemoteDrawEvent(msg) {
+    if (!isWhiteboardActive) toggleWhiteboard();
+    drawWbLine(msg.start, msg.end, msg.tool, msg.color, false);
+}
+
+// 5. Remote Terminal Console (PowerShell / CMD)
+function initTerminal() {
+    const termInput = document.getElementById('terminal-input');
+    const btnSend = document.getElementById('btn-send-command');
+    const btnClear = document.getElementById('btn-clear-terminal');
+
+    if (termInput) {
+        termInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendTerminalCommand();
+        });
+    }
+
+    if (btnSend) btnSend.addEventListener('click', sendTerminalCommand);
+    if (btnClear) {
+        btnClear.addEventListener('click', () => {
+            const out = document.getElementById('terminal-output');
+            if (out) out.innerHTML = '<div class="term-line term-sys">PEGASO Terminal Remota - Consola Limpia</div>';
+        });
+    }
+}
+
+async function sendTerminalCommand() {
+    const termInput = document.getElementById('terminal-input');
+    const out = document.getElementById('terminal-output');
+    if (!termInput || !out) return;
+
+    const cmdText = termInput.value.trim();
+    if (!cmdText) return;
+
+    const shellRadios = document.getElementsByName('term-shell');
+    let shell = 'powershell';
+    for (let r of shellRadios) { if (r.checked) shell = r.value; }
+
+    const promptPrefix = shell === 'cmd' ? 'C:\\>' : 'PS>';
+    appendTerminalLine('cmd', `${promptPrefix} ${cmdText}`);
+    termInput.value = '';
+
+    const res = await sendExplorerRPC('/system/command', { command: cmdText, shell: shell });
+
+    if (res.error) {
+        appendTerminalLine('err', res.error);
+    } else if (res.data) {
+        if (res.data.error) {
+            appendTerminalLine('err', res.data.error);
+        } else {
+            if (res.data.stdout) appendTerminalLine('out', res.data.stdout);
+            if (res.data.stderr) appendTerminalLine('err', res.data.stderr);
+        }
+    }
+}
+
+function appendTerminalLine(type, text) {
+    const out = document.getElementById('terminal-output');
+    if (!out) return;
+    const div = document.createElement('div');
+    div.className = `term-line term-${type}`;
+    div.innerText = text;
+    out.appendChild(div);
+    out.scrollTop = out.scrollHeight;
+}
+
+// 6. Drag & Drop Files Direct to Video Screen
+function initVideoDragAndDrop() {
+    if (!videoContainer) return;
+
+    videoContainer.addEventListener('dragover', (e) => {
+        e.preventDefault();
+    });
+
+    videoContainer.addEventListener('drop', (e) => {
+        e.preventDefault();
+        if (!activeConnection) {
+            showToast("Conéctate primero para enviar archivos.", "error");
+            return;
+        }
+        if (e.dataTransfer.files.length > 0) {
+            showToast("Subiendo archivo arrastrado a la PC remota...", "info");
+            for (let file of e.dataTransfer.files) {
+                uploadFileToRemoteFolder(file);
+            }
+        }
+    });
 }
 
 // --- UI Helpers & Event Listeners ---
@@ -1203,4 +1555,42 @@ function setupUI() {
         }
         if (e.dataTransfer.files.length > 0) handleFileSend(e.dataTransfer.files);
     });
+
+    // Super Features UI binding (Voice, Recording, Whiteboard, Quick Actions, Terminal)
+    if (btnToggleVoice) btnToggleVoice.addEventListener('click', toggleVoiceCall);
+    if (btnToggleRecord) btnToggleRecord.addEventListener('click', toggleSessionRecording);
+    if (btnToggleWhiteboard) btnToggleWhiteboard.addEventListener('click', toggleWhiteboard);
+
+    // Quick Actions Buttons
+    const qaCad = document.getElementById('qa-ctrl-alt-del');
+    const qaLock = document.getElementById('qa-lock');
+    const qaDesktop = document.getElementById('qa-desktop');
+    const qaStart = document.getElementById('qa-start');
+    const qaClipboard = document.getElementById('qa-clipboard');
+
+    if (qaCad) qaCad.addEventListener('click', () => sendQuickAction('ctrl_alt_del'));
+    if (qaLock) qaLock.addEventListener('click', () => sendQuickAction('lock_screen'));
+    if (qaDesktop) qaDesktop.addEventListener('click', () => sendQuickAction('show_desktop'));
+    if (qaStart) qaStart.addEventListener('click', () => sendQuickAction('start_menu'));
+    if (qaClipboard) qaClipboard.addEventListener('click', syncClipboard);
+
+    // Whiteboard tool buttons & color picker
+    document.querySelectorAll('.wb-tool-btn[data-tool]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.wb-tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            wbTool = btn.getAttribute('data-tool');
+        });
+    });
+
+    const wbColorPicker = document.getElementById('wb-color-picker');
+    if (wbColorPicker) wbColorPicker.addEventListener('input', (e) => wbColor = e.target.value);
+
+    const wbClear = document.getElementById('wb-clear');
+    if (wbClear) wbClear.addEventListener('click', () => clearWhiteboardCanvas(true));
+
+    // Initialize modules
+    initWhiteboard();
+    initTerminal();
+    initVideoDragAndDrop();
 }
