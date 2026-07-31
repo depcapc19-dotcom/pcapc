@@ -1,11 +1,13 @@
-// Pegaso - Core WebRTC & UI Logic
+// Pegaso - Core WebRTC, Remote Control & Explorer Logic
 const PEER_ID_PREFIX = "pegaso-";
-const CHUNK_SIZE = 32768; // 32KB chunks for high performance
+const CHUNK_SIZE = 32768; // 32KB chunks for high performance WebRTC transfers
 let peer = null;
 let activeConnection = null;
 let activeCall = null;
 let localStream = null;
 let activeTransfers = {}; // Stores info for current file transfers
+let currentRemoteExplorerPath = "ROOT";
+let pendingExplorerCallbacks = {};
 
 // DOM Elements
 const myIdEl = document.getElementById('my-id');
@@ -35,7 +37,7 @@ const toastEl = document.getElementById('notification-toast');
 const toastIcon = document.getElementById('toast-icon');
 const toastMessage = document.getElementById('toast-message');
 
-// Remote Control & Fullscreen Elements & State
+// Remote Control Elements
 const btnToggleControl = document.getElementById('btn-toggle-control');
 const controlBtnLabel = document.getElementById('control-btn-label');
 const controlBadge = document.getElementById('control-badge');
@@ -46,23 +48,38 @@ const btnExitFullscreen = document.getElementById('btn-exit-fullscreen');
 const fullscreenOverlayBar = document.getElementById('fullscreen-overlay-bar');
 let isRemoteControlActive = false;
 
+// Saved Devices & History Elements
+const savedDevicesList = document.getElementById('saved-devices-list');
+const emptySavedMsg = document.getElementById('empty-saved-msg');
+const btnSaveCurrent = document.getElementById('btn-save-current');
+
+// Remote File Explorer Elements
+const explorerPathInput = document.getElementById('explorer-path-input');
+const btnExplorerGo = document.getElementById('btn-explorer-go');
+const btnExplorerUp = document.getElementById('btn-explorer-up');
+const btnExplorerRefresh = document.getElementById('btn-explorer-refresh');
+const btnExplorerMkdir = document.getElementById('btn-explorer-mkdir');
+const btnExplorerUpload = document.getElementById('btn-explorer-upload');
+const explorerFilePicker = document.getElementById('explorer-file-picker');
+const explorerQuickAccess = document.getElementById('explorer-quick-access');
+const explorerFilesList = document.getElementById('explorer-files-list');
+
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
     initPeer();
     setupUI();
+    renderSavedDevices();
 });
 
 // --- PeerJS Connections Setup ---
 function initPeer() {
-    // Generate a 6-digit random number for user-friendly ID
     const random6Digit = Math.floor(100000 + Math.random() * 900000);
     const chosenId = random6Digit.toString();
 
     updateStatusBadge('connecting', 'Inicializando...');
 
-    // Initialize PeerJS on public signaling cloud
     peer = new Peer(chosenId, {
-        debug: 1, // Only print warnings/errors to console
+        debug: 1,
         config: {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -85,8 +102,8 @@ function initPeer() {
     peer.on('error', (err) => {
         console.error("PeerJS Error:", err);
         if (err.type === 'unavailable-id') {
-            showToast("Tu ID asignado ya estaba ocupado, regenerando...", "error");
-            setTimeout(initPeer, 1500); // Retry with a new random ID
+            showToast("ID asignado ocupado, regenerando...", "error");
+            setTimeout(initPeer, 1500);
         } else if (err.type === 'peer-not-found') {
             showToast("No se encontró el dispositivo remoto. Revisa el ID.", "error");
             updateStatusBadge('online', 'Listo');
@@ -96,10 +113,8 @@ function initPeer() {
         }
     });
 
-    // Handle incoming P2P data connection requests
     peer.on('connection', (conn) => {
         if (activeConnection) {
-            // Already connected, reject new incoming connections
             conn.on('open', () => {
                 conn.send({ type: 'reject', reason: 'Dispositivo ocupado en otra sesión.' });
                 setTimeout(() => conn.close(), 500);
@@ -109,12 +124,10 @@ function initPeer() {
         setupConnection(conn);
     });
 
-    // Handle incoming WebRTC screen/video stream call requests
     peer.on('call', (call) => {
         showToast("Recibiendo transmisión de pantalla...", "success");
         activeCall = call;
-        
-        call.answer(); // Answer the call with empty stream (receiver only)
+        call.answer();
         
         call.on('stream', (remoteStream) => {
             showRemoteVideo(remoteStream);
@@ -137,19 +150,21 @@ function initPeer() {
 function setupConnection(conn) {
     activeConnection = conn;
     
-    // Set up connection state listeners
     conn.on('open', () => {
         showToast("¡Conexión establecida con éxito!", "success");
         connectedPeerName.innerText = conn.peer;
         
-        // Show connection panel & unlock tabs
         activeConnectionPanel.classList.remove('hidden');
         workspaceTabs.classList.remove('locked');
         tabsOverlay.classList.add('hidden');
+        if (btnSaveCurrent) btnSaveCurrent.style.display = 'inline-block';
         updateStatusBadge('online', `Conectado a ${conn.peer}`);
         
-        // Clear remote ID input
         peerIdInput.value = '';
+        saveDeviceToHistory(conn.peer);
+
+        // Cargar explorador remoto al conectar
+        fetchRemoteExplorerPath("ROOT");
     });
 
     conn.on('data', (data) => {
@@ -167,11 +182,10 @@ function setupConnection(conn) {
     });
 }
 
-// --- Connect Outgoing ---
-function connectToPeer() {
-    const targetId = peerIdInput.value.trim();
+function connectToPeer(targetIdOverride) {
+    const targetId = typeof targetIdOverride === 'string' ? targetIdOverride : peerIdInput.value.trim();
     if (!targetId) {
-        showToast("Por favor, introduce un ID remoto válido.", "error");
+        showToast("Introduce un ID remoto válido.", "error");
         return;
     }
     
@@ -182,22 +196,13 @@ function connectToPeer() {
 
     updateStatusBadge('connecting', 'Conectando...');
     
-    // Connect to target peer
-    const conn = peer.connect(targetId, {
-        reliable: true
-    });
-    
+    const conn = peer.connect(targetId, { reliable: true });
     setupConnection(conn);
 }
 
-// --- Disconnect Connection ---
 function disconnectAll() {
-    if (activeConnection) {
-        activeConnection.close();
-    }
-    if (activeCall) {
-        activeCall.close();
-    }
+    if (activeConnection) activeConnection.close();
+    if (activeCall) activeCall.close();
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
@@ -206,7 +211,6 @@ function disconnectAll() {
     showToast("Te has desconectado.", "info");
 }
 
-// --- Reset UI States ---
 function resetUI() {
     activeConnection = null;
     activeCall = null;
@@ -218,21 +222,20 @@ function resetUI() {
     activeConnectionPanel.classList.add('hidden');
     workspaceTabs.classList.add('locked');
     tabsOverlay.classList.remove('hidden');
+    if (btnSaveCurrent) btnSaveCurrent.style.display = 'none';
     updateStatusBadge('online', 'Listo');
     
-    // Reset file tab elements
     transfersList.innerHTML = '';
     transfersList.appendChild(noTransfersMsg);
     activeTransfers = {};
 
-    // Reset video elements
     hideRemoteVideo();
     btnShareScreen.classList.remove('hidden');
     btnStopShare.classList.add('hidden');
     screenStatusText.innerText = "Pantalla inactiva";
 }
 
-// --- Handle Incoming P2P Data Messages ---
+// --- Handle Incoming Messages (Control + Remote Explorer + P2P) ---
 function handleIncomingData(msg) {
     if (typeof msg !== 'object' || msg === null) return;
 
@@ -240,50 +243,6 @@ function handleIncomingData(msg) {
         case 'reject':
             showToast(`Conexión rechazada: ${msg.reason}`, "error");
             resetUI();
-            break;
-
-        case 'file-header':
-            // Prepare receiver for incoming file chunks
-            const { transferId, name, size } = msg;
-            activeTransfers[transferId] = {
-                name: name,
-                size: size,
-                receivedBytes: 0,
-                chunks: [],
-                startTime: Date.now()
-            };
-            noTransfersMsg.classList.add('hidden');
-            createTransferRow(transferId, name, size, 'receiving');
-            break;
-
-        case 'file-chunk':
-            // Receive file chunk
-            const transfer = activeTransfers[msg.transferId];
-            if (!transfer) return;
-
-            transfer.chunks.push(msg.chunk);
-            transfer.receivedBytes += msg.chunk.byteLength;
-            
-            // Calculate progress and update UI
-            const percent = (transfer.receivedBytes / transfer.size) * 100;
-            const speed = calculateSpeed(transfer.receivedBytes, transfer.startTime);
-            updateTransferRowProgress(msg.transferId, percent, transfer.receivedBytes, transfer.size, speed);
-            break;
-
-        case 'file-eof':
-            // End of File, rebuild blob and trigger download
-            const completedTransfer = activeTransfers[msg.transferId];
-            if (!completedTransfer) return;
-
-            // Mark completed in UI
-            markTransferCompleted(msg.transferId);
-
-            // Reconstruct the full file from binary chunks
-            const fileBlob = new Blob(completedTransfer.chunks);
-            triggerFileDownload(fileBlob, completedTransfer.name);
-            
-            showToast(`Archivo recibido: ${completedTransfer.name}`, "success");
-            delete activeTransfers[msg.transferId];
             break;
 
         case 'remote-control-status':
@@ -304,92 +263,490 @@ function handleIncomingData(msg) {
             handleIncomingRemoteControl(msg);
             break;
 
+        // Remote Explorer RPC Handling (Host Side)
+        case 'explorer-request':
+            handleHostExplorerRequest(msg);
+            break;
+
+        case 'explorer-response':
+            if (pendingExplorerCallbacks[msg.requestId]) {
+                pendingExplorerCallbacks[msg.requestId](msg);
+                delete pendingExplorerCallbacks[msg.requestId];
+            }
+            break;
+
+        // P2P Direct Transfer Handling
+        case 'file-header':
+            const { transferId, name, size } = msg;
+            activeTransfers[transferId] = {
+                name: name,
+                size: size,
+                receivedBytes: 0,
+                chunks: [],
+                startTime: Date.now()
+            };
+            noTransfersMsg.classList.add('hidden');
+            createTransferRow(transferId, name, size, 'receiving');
+            break;
+
+        case 'file-chunk':
+            const transfer = activeTransfers[msg.transferId];
+            if (!transfer) return;
+
+            transfer.chunks.push(msg.chunk);
+            transfer.receivedBytes += msg.chunk.byteLength;
+            
+            const percent = (transfer.receivedBytes / transfer.size) * 100;
+            const speed = calculateSpeed(transfer.receivedBytes, transfer.startTime);
+            updateTransferRowProgress(msg.transferId, percent, transfer.receivedBytes, transfer.size, speed);
+            break;
+
+        case 'file-eof':
+            const completedTransfer = activeTransfers[msg.transferId];
+            if (!completedTransfer) return;
+
+            markTransferCompleted(msg.transferId);
+            const fileBlob = new Blob(completedTransfer.chunks);
+            triggerFileDownload(fileBlob, completedTransfer.name);
+            showToast(`Archivo recibido: ${completedTransfer.name}`, "success");
+            delete activeTransfers[msg.transferId];
+            break;
+
         default:
-            console.log("Mensaje desconocido recibido:", msg);
+            console.log("Mensaje recibido:", msg);
     }
 }
 
-// --- File Senders Logic ---
-async function handleFileSend(files) {
-    if (!activeConnection) {
-        showToast("Debes estar conectado a otro dispositivo para enviar archivos.", "error");
+// --- Remote Control Execution ---
+function handleIncomingRemoteControl(msg) {
+    if (msg.action === 'mousemove' || msg.action === 'mousedown' || msg.action === 'mouseup' || msg.action === 'click') {
+        if (remoteCursor && videoContainer) {
+            remoteCursor.classList.remove('hidden');
+            const containerRect = videoContainer.getBoundingClientRect();
+            const leftPx = msg.xPct * containerRect.width;
+            const topPx = msg.yPct * containerRect.height;
+            remoteCursor.style.left = `${leftPx}px`;
+            remoteCursor.style.top = `${topPx}px`;
+        }
+    }
+    
+    // Transmitir al Agente Nativo de Windows (localhost:9999)
+    fetch('http://localhost:9999/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msg)
+    }).catch(() => {
+        // Silencioso si el agente nativo no está corriendo
+    });
+}
+
+function sendRemoteMouseEvent(e, action) {
+    if (!isRemoteControlActive || !activeConnection) return;
+    const rect = remoteVideo.getBoundingClientRect();
+    const xPct = (e.clientX - rect.left) / rect.width;
+    const yPct = (e.clientY - rect.top) / rect.height;
+
+    if (xPct < 0 || xPct > 1 || yPct < 0 || yPct > 1) return;
+
+    activeConnection.send({
+        type: 'remote-control',
+        action: action,
+        xPct: parseFloat(xPct.toFixed(4)),
+        yPct: parseFloat(yPct.toFixed(4)),
+        button: e.button,
+        deltaY: e.deltaY || 0
+    });
+}
+
+function sendRemoteKeyEvent(e, action) {
+    if (!isRemoteControlActive || !activeConnection) return;
+    
+    // Evitar que combinaciones afecten el navegador local
+    if (['Tab', 'Backspace', 'Escape', 'AltGraph'].includes(e.key) || e.ctrlKey || e.altKey) {
+        e.preventDefault();
+    }
+
+    activeConnection.send({
+        type: 'remote-control',
+        action: action,
+        key: e.key,
+        code: e.code,
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey
+    });
+}
+
+function toggleRemoteControl() {
+    isRemoteControlActive = !isRemoteControlActive;
+    if (isRemoteControlActive) {
+        remoteVideo.classList.add('remote-control-active');
+        if (controlBtnLabel) controlBtnLabel.innerText = "Desactivar Control";
+        if (controlBadge) {
+            controlBadge.innerText = "Control Activo";
+            controlBadge.classList.remove('hidden');
+        }
+        remoteVideo.focus();
+        showToast("Control remoto nativo activado. Mueve el mouse y escribe con tu teclado.", "success");
+    } else {
+        remoteVideo.classList.remove('remote-control-active');
+        if (controlBtnLabel) controlBtnLabel.innerText = "Activar Control Remoto";
+        if (controlBadge) controlBadge.classList.add('hidden');
+        showToast("Control remoto desactivado.", "info");
+    }
+
+    if (activeConnection) {
+        activeConnection.send({
+            type: 'remote-control-status',
+            active: isRemoteControlActive
+        });
+    }
+}
+
+// --- Remote File Explorer RPC Logic (AnyDesk Style) ---
+function sendExplorerRPC(endpoint, payload) {
+    return new Promise((resolve) => {
+        if (!activeConnection) {
+            resolve({ error: "No hay conexión activa con un dispositivo remoto." });
+            return;
+        }
+
+        const requestId = Math.random().toString(36).substring(2, 11);
+        pendingExplorerCallbacks[requestId] = (response) => resolve(response);
+
+        // Timeout de seguridad en caso de que el peer remoto no responda
+        setTimeout(() => {
+            if (pendingExplorerCallbacks[requestId]) {
+                delete pendingExplorerCallbacks[requestId];
+                resolve({ error: "Tiempo de espera agotado al conectar con el agente nativo remoto." });
+            }
+        }, 10000);
+
+        activeConnection.send({
+            type: 'explorer-request',
+            requestId: requestId,
+            endpoint: endpoint,
+            payload: payload
+        });
+    });
+}
+
+// Lado del HOST (Recibe la petición del espectador y consulta su agente nativo localhost:9999)
+async function handleHostExplorerRequest(msg) {
+    const { requestId, endpoint, payload } = msg;
+
+    try {
+        if (endpoint === '/files/download') {
+            // Manejo especial de descarga directa de archivo nativo
+            const res = await fetch(`http://localhost:9999/files/download?path=${encodeURIComponent(payload.path)}`);
+            if (!res.ok) throw new Error("Error al leer archivo en PC hospedadora");
+            const blob = await res.blob();
+            
+            // Convertir a ArrayBuffer o Base64 para enviar de vuelta
+            const arrayBuffer = await blob.arrayBuffer();
+            activeConnection.send({
+                type: 'explorer-response',
+                requestId: requestId,
+                status: 'success',
+                fileName: payload.name,
+                binaryData: arrayBuffer
+            });
+            return;
+        }
+
+        const res = await fetch(`http://localhost:9999${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload || {})
+        });
+        const result = await res.json();
+        
+        activeConnection.send({
+            type: 'explorer-response',
+            requestId: requestId,
+            status: 'success',
+            data: result
+        });
+    } catch (err) {
+        activeConnection.send({
+            type: 'explorer-response',
+            requestId: requestId,
+            status: 'error',
+            error: "Asegúrate de haber ejecutado 'iniciar-control-windows.bat' en la PC remota. (" + err.message + ")"
+        });
+    }
+}
+
+// Renderizado y Navegación del Explorador Remoto
+async function fetchRemoteExplorerPath(path) {
+    renderExplorerLoading();
+    
+    const response = await sendExplorerRPC('/files/list', { path: path });
+
+    if (response.error || (response.data && response.data.error)) {
+        const errorMsg = response.error || response.data.error;
+        showToast(errorMsg, "error");
+        renderExplorerError(errorMsg);
         return;
     }
 
-    noTransfersMsg.classList.add('hidden');
+    const data = response.data;
+    currentRemoteExplorerPath = data.currentPath;
+    explorerPathInput.value = currentRemoteExplorerPath;
 
-    for (let file of files) {
-        const transferId = Math.random().toString(36).substring(2, 11);
-        createTransferRow(transferId, file.name, file.size, 'sending');
+    renderExplorerQuickAccess(data.quickAccess || []);
+    renderExplorerFilesList(data.items || [], data.parentPath);
+}
+
+function renderExplorerLoading() {
+    explorerFilesList.innerHTML = `
+        <tr>
+            <td colspan="5" class="explorer-loading-state">
+                <i data-lucide="loader-2" class="spin-icon"></i>
+                <p>Cargando carpeta remota...</p>
+            </td>
+        </tr>
+    `;
+    lucide.createIcons();
+}
+
+function renderExplorerError(msg) {
+    explorerFilesList.innerHTML = `
+        <tr>
+            <td colspan="5" class="explorer-loading-state" style="color: var(--danger);">
+                <i data-lucide="alert-triangle" style="width: 32px; height: 32px; margin-bottom: 8px;"></i>
+                <p>${msg}</p>
+                <button class="btn btn-secondary btn-sm" style="margin-top: 10px;" onclick="fetchRemoteExplorerPath('ROOT')">
+                    Ir a Discos Locales
+                </button>
+            </td>
+        </tr>
+    `;
+    lucide.createIcons();
+}
+
+function renderExplorerQuickAccess(quickItems) {
+    explorerQuickAccess.innerHTML = '';
+    quickItems.forEach(item => {
+        const btn = document.createElement('button');
+        btn.className = 'quick-btn';
+        btn.innerHTML = `<i data-lucide="${item.icon || 'folder'}"></i> ${item.name}`;
+        btn.onclick = () => fetchRemoteExplorerPath(item.path);
+        explorerQuickAccess.appendChild(btn);
+    });
+    lucide.createIcons();
+}
+
+function renderExplorerFilesList(items, parentPath) {
+    explorerFilesList.innerHTML = '';
+
+    if (parentPath !== null && parentPath !== undefined) {
+        const upRow = document.createElement('tr');
+        upRow.className = 'explorer-row is-folder';
+        upRow.innerHTML = `
+            <td><i data-lucide="corner-left-up" class="item-icon"></i></td>
+            <td colspan="4" class="item-name-cell"><strong>.. (Subir nivel)</strong></td>
+        `;
+        upRow.onclick = () => fetchRemoteExplorerPath(parentPath);
+        explorerFilesList.appendChild(upRow);
+    }
+
+    if (items.length === 0) {
+        const emptyRow = document.createElement('tr');
+        emptyRow.innerHTML = `
+            <td colspan="5" class="explorer-loading-state">
+                <p>Esta carpeta está vacía.</p>
+            </td>
+        `;
+        explorerFilesList.appendChild(emptyRow);
+        lucide.createIcons();
+        return;
+    }
+
+    items.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.className = `explorer-row ${item.isDir ? 'is-folder' : ''}`;
         
-        // Start async transmission
-        sendFileChunks(transferId, file);
+        let iconName = item.icon || (item.isDir ? 'folder' : 'file');
+        let iconClass = item.isDir ? 'folder-icon' : (item.icon === 'hard-drive' ? 'drive-icon' : 'file-icon');
+
+        tr.innerHTML = `
+            <td><i data-lucide="${iconName}" class="item-icon ${iconClass}"></i></td>
+            <td class="item-name-cell">${item.name}</td>
+            <td>${item.isDir ? '--' : formatBytes(item.size)}</td>
+            <td>${item.modifiedTime || '--'}</td>
+            <td style="text-align: right;">
+                <div class="explorer-actions">
+                    ${!item.isDir ? `
+                        <button class="action-btn-sm" title="Descargar este archivo" onclick="downloadRemoteFile('${encodeURIComponent(item.path)}', '${encodeURIComponent(item.name)}')">
+                            <i data-lucide="download"></i>
+                        </button>
+                    ` : ''}
+                    <button class="action-btn-sm delete-btn" title="Eliminar del equipo remoto" onclick="deleteRemoteItem('${encodeURIComponent(item.path)}')">
+                        <i data-lucide="trash-2"></i>
+                    </button>
+                </div>
+            </td>
+        `;
+
+        if (item.isDir) {
+            tr.onclick = (e) => {
+                if (e.target.closest('.explorer-actions')) return;
+                fetchRemoteExplorerPath(item.path);
+            };
+        }
+
+        explorerFilesList.appendChild(tr);
+    });
+
+    lucide.createIcons();
+}
+
+async function deleteRemoteItem(encodedPath) {
+    const path = decodeURIComponent(encodedPath);
+    if (!confirm(`¿Estás seguro de que deseas eliminar permanentemente '${path}' del equipo remoto?`)) {
+        return;
+    }
+
+    showToast("Eliminando elemento remoto...", "info");
+    const res = await sendExplorerRPC('/files/delete', { path: path });
+
+    if (res.error || (res.data && res.data.error)) {
+        showToast(res.error || res.data.error, "error");
+    } else {
+        showToast("Elemento eliminado correctamente.", "success");
+        fetchRemoteExplorerPath(currentRemoteExplorerPath);
     }
 }
 
-async function sendFileChunks(transferId, file) {
-    const conn = activeConnection;
-    if (!conn) return;
+async function createRemoteFolder() {
+    const folderName = prompt("Introduce el nombre de la nueva carpeta:");
+    if (!folderName || !folderName.trim()) return;
 
-    // Send metadata header
-    conn.send({
-        type: 'file-header',
-        transferId: transferId,
-        name: file.name,
-        size: file.size
+    showToast("Creando carpeta remota...", "info");
+    const res = await sendExplorerRPC('/files/mkdir', {
+        path: currentRemoteExplorerPath,
+        name: folderName.trim()
     });
 
-    const startTime = Date.now();
-    let offset = 0;
-    
-    // Set low buffer threshold on the WebRTC data channel for high speeds
-    if (conn.dataChannel) {
-        conn.dataChannel.bufferedAmountLowThreshold = 65536; // 64KB
+    if (res.error || (res.data && res.data.error)) {
+        showToast(res.error || res.data.error, "error");
+    } else {
+        showToast("Carpeta creada con éxito.", "success");
+        fetchRemoteExplorerPath(currentRemoteExplorerPath);
+    }
+}
+
+async function downloadRemoteFile(encodedPath, encodedName) {
+    const path = decodeURIComponent(encodedPath);
+    const name = decodeURIComponent(encodedName);
+    showToast(`Descargando ${name} desde equipo remoto...`, "info");
+
+    const res = await sendExplorerRPC('/files/download', { path: path, name: name });
+
+    if (res.error) {
+        showToast(res.error, "error");
+    } else if (res.binaryData) {
+        const fileBlob = new Blob([res.binaryData]);
+        triggerFileDownload(fileBlob, name);
+        showToast(`Descarga completada: ${name}`, "success");
+    }
+}
+
+async function uploadFileToRemoteFolder(file) {
+    if (!currentRemoteExplorerPath || currentRemoteExplorerPath === "ROOT") {
+        showToast("Selecciona una carpeta o disco en el explorador antes de subir.", "error");
+        return;
     }
 
-    try {
-        while (offset < file.size) {
-            // Buffer congestion control: prevent browser WebRTC crash
-            if (conn.dataChannel && conn.dataChannel.bufferedAmount > 1024 * 1024) { // 1MB Limit
-                await new Promise(resolve => {
-                    conn.dataChannel.onbufferedamountlow = () => {
-                        conn.dataChannel.onbufferedamountlow = null;
-                        resolve();
-                    };
-                });
-            }
+    showToast(`Subiendo ${file.name} a la PC remota...`, "info");
 
-            const blobSlice = file.slice(offset, offset + CHUNK_SIZE);
-            const arrayBuffer = await blobSlice.arrayBuffer();
-
-            conn.send({
-                type: 'file-chunk',
-                transferId: transferId,
-                chunk: arrayBuffer
-            });
-
-            offset += blobSlice.size;
-            
-            // Calculate progress and speed
-            const percent = (offset / file.size) * 100;
-            const speed = calculateSpeed(offset, startTime);
-            updateTransferRowProgress(transferId, percent, offset, file.size, speed);
-        }
-
-        // Send End-of-File packet
-        conn.send({
-            type: 'file-eof',
-            transferId: transferId
+    const reader = new FileReader();
+    reader.onload = async () => {
+        const base64Data = reader.result.split(',')[1];
+        const res = await sendExplorerRPC('/files/upload', {
+            targetPath: currentRemoteExplorerPath,
+            fileName: file.name,
+            base64Data: base64Data
         });
 
-        markTransferCompleted(transferId);
-        showToast(`Archivo enviado: ${file.name}`, "success");
+        if (res.error || (res.data && res.data.error)) {
+            showToast(res.error || res.data.error, "error");
+        } else {
+            showToast(`Archivo subido con éxito a ${file.name}`, "success");
+            fetchRemoteExplorerPath(currentRemoteExplorerPath);
+        }
+    };
+    reader.readAsDataURL(file);
+}
 
-    } catch (err) {
-        console.error("Error al enviar archivo:", err);
-        showToast(`Error al enviar ${file.name}`, "error");
-        markTransferError(transferId);
+// --- Saved Devices & Connection History Module ("Guardar información") ---
+function getSavedDevices() {
+    try {
+        return JSON.parse(localStorage.getItem('pegaso_saved_devices')) || [];
+    } catch {
+        return [];
     }
+}
+
+function saveDeviceToHistory(id, customAlias = null) {
+    let devices = getSavedDevices();
+    const existingIndex = devices.findIndex(d => d.id === id);
+    
+    const aliasName = customAlias || (existingIndex >= 0 ? devices[existingIndex].name : `PC Remota ${id}`);
+    
+    if (existingIndex >= 0) {
+        devices[existingIndex].name = aliasName;
+        devices[existingIndex].lastConnected = new Date().toLocaleDateString('es-ES');
+    } else {
+        devices.unshift({
+            id: id,
+            name: aliasName,
+            lastConnected: new Date().toLocaleDateString('es-ES')
+        });
+    }
+
+    localStorage.setItem('pegaso_saved_devices', JSON.stringify(devices));
+    renderSavedDevices();
+}
+
+function removeSavedDevice(id) {
+    let devices = getSavedDevices().filter(d => d.id !== id);
+    localStorage.setItem('pegaso_saved_devices', JSON.stringify(devices));
+    renderSavedDevices();
+    showToast("Dispositivo eliminado de la lista guardada.", "info");
+}
+
+function renderSavedDevices() {
+    const devices = getSavedDevices();
+    savedDevicesList.innerHTML = '';
+
+    if (devices.length === 0) {
+        savedDevicesList.appendChild(emptySavedMsg);
+        return;
+    }
+
+    devices.forEach(device => {
+        const itemEl = document.createElement('div');
+        itemEl.className = 'saved-device-item';
+        itemEl.innerHTML = `
+            <div class="saved-device-info">
+                <span class="saved-device-name" title="${device.name}">${device.name}</span>
+                <span class="saved-device-id">ID: ${device.id}</span>
+            </div>
+            <div class="saved-device-actions">
+                <button class="action-btn-sm" title="Conectar rápido" onclick="connectToPeer('${device.id}')">
+                    <i data-lucide="zap"></i>
+                </button>
+                <button class="action-btn-sm delete-btn" title="Eliminar de guardados" onclick="removeSavedDevice('${device.id}')">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+        `;
+        savedDevicesList.appendChild(itemEl);
+    });
+
+    lucide.createIcons();
 }
 
 // --- Screen Sharing Logic ---
@@ -400,32 +757,19 @@ async function startScreenShare() {
     }
 
     try {
-        // Request screen capture from browser
         localStream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-                cursor: "always",
-                frameRate: { ideal: 15, max: 30 }
-            },
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true
-            }
+            video: { cursor: "always", frameRate: { ideal: 15, max: 30 } },
+            audio: { echoCancellation: true, noiseSuppression: true }
         });
 
-        // Toggle UI
         btnShareScreen.classList.add('hidden');
         btnStopShare.classList.remove('hidden');
         screenStatusText.innerText = "Transmitiendo pantalla...";
         showToast("Compartiendo tu pantalla...", "success");
 
-        // Listen for screen sharing stop from native browser UI (e.g. Chrome's floating bar)
-        localStream.getVideoTracks()[0].onended = () => {
-            stopScreenShare();
-        };
+        localStream.getVideoTracks()[0].onended = () => stopScreenShare();
 
-        // Call the remote peer with the screen media stream
         activeCall = peer.call(activeConnection.peer, localStream);
-        
         activeCall.on('error', (err) => {
             showToast("Error en transmisión de pantalla: " + err.message, "error");
             stopScreenShare();
@@ -457,12 +801,9 @@ function showRemoteVideo(stream) {
     videoPlaceholder.classList.add('hidden');
     remoteVideo.style.display = 'block';
     remoteVideo.srcObject = stream;
-    remoteVideo.play().catch(err => {
-        console.warn("Autoplay prevenido por navegador:", err);
-    });
+    remoteVideo.play().catch(err => console.warn("Autoplay prevenido por navegador:", err));
     screenStatusText.innerText = "Recibiendo pantalla de la PC remota";
     
-    // Show remote control and fullscreen buttons for viewer
     if (btnToggleControl) btnToggleControl.classList.remove('hidden');
     if (btnToggleFullscreen) btnToggleFullscreen.classList.remove('hidden');
 }
@@ -474,15 +815,8 @@ function hideRemoteVideo() {
     
     if (btnToggleControl) btnToggleControl.classList.add('hidden');
     if (btnToggleFullscreen) btnToggleFullscreen.classList.add('hidden');
-    if (isRemoteControlActive) {
-        toggleRemoteControl();
-    }
-    if (remoteCursor) {
-        remoteCursor.classList.add('hidden');
-    }
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
-        toggleFullscreen();
-    }
+    if (isRemoteControlActive) toggleRemoteControl();
+    if (remoteCursor) remoteCursor.classList.add('hidden');
 }
 
 function switchToScreenTab() {
@@ -492,26 +826,91 @@ function switchToScreenTab() {
     }
 }
 
+// --- P2P Direct File Sender ---
+async function handleFileSend(files) {
+    if (!activeConnection) {
+        showToast("Debes estar conectado para enviar archivos.", "error");
+        return;
+    }
+
+    noTransfersMsg.classList.add('hidden');
+
+    for (let file of files) {
+        const transferId = Math.random().toString(36).substring(2, 11);
+        createTransferRow(transferId, file.name, file.size, 'sending');
+        sendFileChunks(transferId, file);
+    }
+}
+
+async function sendFileChunks(transferId, file) {
+    const conn = activeConnection;
+    if (!conn) return;
+
+    conn.send({
+        type: 'file-header',
+        transferId: transferId,
+        name: file.name,
+        size: file.size
+    });
+
+    const startTime = Date.now();
+    let offset = 0;
+
+    if (conn.dataChannel) {
+        conn.dataChannel.bufferedAmountLowThreshold = 65536;
+    }
+
+    try {
+        while (offset < file.size) {
+            if (conn.dataChannel && conn.dataChannel.bufferedAmount > 1024 * 1024) {
+                await new Promise(resolve => {
+                    conn.dataChannel.onbufferedamountlow = () => {
+                        conn.dataChannel.onbufferedamountlow = null;
+                        resolve();
+                    };
+                });
+            }
+
+            const blobSlice = file.slice(offset, offset + CHUNK_SIZE);
+            const arrayBuffer = await blobSlice.arrayBuffer();
+
+            conn.send({
+                type: 'file-chunk',
+                transferId: transferId,
+                chunk: arrayBuffer
+            });
+
+            offset += blobSlice.size;
+            const percent = (offset / file.size) * 100;
+            const speed = calculateSpeed(offset, startTime);
+            updateTransferRowProgress(transferId, percent, offset, file.size, speed);
+        }
+
+        conn.send({
+            type: 'file-eof',
+            transferId: transferId
+        });
+
+        markTransferCompleted(transferId);
+        showToast(`Archivo enviado: ${file.name}`, "success");
+
+    } catch (err) {
+        console.error("Error al enviar archivo:", err);
+        showToast(`Error al enviar ${file.name}`, "error");
+        markTransferError(transferId);
+    }
+}
+
 // --- Fullscreen Toggle Logic ---
 function toggleFullscreen() {
     if (!videoContainer) return;
 
     if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-        if (videoContainer.requestFullscreen) {
-            videoContainer.requestFullscreen();
-        } else if (videoContainer.webkitRequestFullscreen) {
-            videoContainer.webkitRequestFullscreen();
-        } else if (videoContainer.msRequestFullscreen) {
-            videoContainer.msRequestFullscreen();
-        }
+        if (videoContainer.requestFullscreen) videoContainer.requestFullscreen();
+        else if (videoContainer.webkitRequestFullscreen) videoContainer.webkitRequestFullscreen();
     } else {
-        if (document.exitFullscreen) {
-            document.exitFullscreen();
-        } else if (document.webkitExitFullscreen) {
-            document.webkitExitFullscreen();
-        } else if (document.msExitFullscreen) {
-            document.msExitFullscreen();
-        }
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
     }
 }
 
@@ -525,104 +924,22 @@ function handleFullscreenChange() {
     }
 }
 
-// --- Remote Control Functions ---
-function toggleRemoteControl() {
-    isRemoteControlActive = !isRemoteControlActive;
-    if (isRemoteControlActive) {
-        remoteVideo.classList.add('remote-control-active');
-        if (controlBtnLabel) controlBtnLabel.innerText = "Desactivar Control";
-        if (controlBadge) {
-            controlBadge.innerText = "Control Activo";
-            controlBadge.classList.remove('hidden');
-        }
-        remoteVideo.focus();
-        showToast("Control remoto activado. Interactúa sobre el video para enviar clicks y teclas.", "success");
-    } else {
-        remoteVideo.classList.remove('remote-control-active');
-        if (controlBtnLabel) controlBtnLabel.innerText = "Activar Control Remoto";
-        if (controlBadge) controlBadge.classList.add('hidden');
-        showToast("Control remoto desactivado.", "info");
-    }
-
-    if (activeConnection) {
-        activeConnection.send({
-            type: 'remote-control-status',
-            active: isRemoteControlActive
-        });
-    }
-}
-
-function sendRemoteMouseEvent(e, action) {
-    if (!isRemoteControlActive || !activeConnection) return;
-    const rect = remoteVideo.getBoundingClientRect();
-    const xPct = (e.clientX - rect.left) / rect.width;
-    const yPct = (e.clientY - rect.top) / rect.height;
-
-    if (xPct < 0 || xPct > 1 || yPct < 0 || yPct > 1) return;
-
-    activeConnection.send({
-        type: 'remote-control',
-        action: action,
-        xPct: parseFloat(xPct.toFixed(4)),
-        yPct: parseFloat(yPct.toFixed(4)),
-        button: e.button
-    });
-}
-
-function sendRemoteKeyEvent(e, action) {
-    if (!isRemoteControlActive || !activeConnection) return;
-    activeConnection.send({
-        type: 'remote-control',
-        action: action,
-        key: e.key,
-        code: e.code,
-        shiftKey: e.shiftKey,
-        ctrlKey: e.ctrlKey,
-        altKey: e.altKey
-    });
-}
-
-function handleIncomingRemoteControl(msg) {
-    if (msg.action === 'mousemove' || msg.action === 'mousedown' || msg.action === 'mouseup' || msg.action === 'click') {
-        if (remoteCursor && videoContainer) {
-            remoteCursor.classList.remove('hidden');
-            const containerRect = videoContainer.getBoundingClientRect();
-            const leftPx = msg.xPct * containerRect.width;
-            const topPx = msg.yPct * containerRect.height;
-            remoteCursor.style.left = `${leftPx}px`;
-            remoteCursor.style.top = `${topPx}px`;
-        }
-    }
-    
-    // Bridge for native OS Agent if present (Electron / Node agent bridge)
-    if (window.pegasoDesktopAgent && typeof window.pegasoDesktopAgent.executeCommand === 'function') {
-        window.pegasoDesktopAgent.executeCommand(msg);
-    }
-}
-
-// --- UI Helpers & Formatting ---
-
+// --- UI Helpers & Event Listeners ---
 function updateStatusBadge(state, text) {
     globalStatusBadge.className = 'connection-badge';
-    if (state === 'online') {
-        globalStatusBadge.classList.add('status-online');
-    } else if (state === 'connecting') {
-        globalStatusBadge.classList.add('status-connecting');
-    } else {
-        globalStatusBadge.classList.add('status-offline');
-    }
+    if (state === 'online') globalStatusBadge.classList.add('status-online');
+    else if (state === 'connecting') globalStatusBadge.classList.add('status-connecting');
+    else globalStatusBadge.classList.add('status-offline');
     globalStatusText.innerText = text;
 }
 
 function generateQRCode(id) {
-    // Generate QR code pointing to this exact app URL with autoconnect param
     const autoConnectUrl = `${window.location.origin}${window.location.pathname}?connect=${id}`;
     const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(autoConnectUrl)}&color=0a0b1e&bgcolor=ffffff`;
     qrImage.src = qrApiUrl;
 }
 
 function checkAutoConnect() {
-    // Read ?connect=XXXXXX query parameter from URL for instant connection
     const urlParams = new URLSearchParams(window.location.search);
     const targetConnect = urlParams.get('connect');
     if (targetConnect) {
@@ -636,7 +953,6 @@ function showToast(message, type = 'info') {
     toastMessage.innerText = message;
     toastEl.className = 'toast';
     
-    // Set styles depending on status
     if (type === 'error') {
         toastEl.classList.add('toast-error');
         toastIcon.setAttribute('data-lucide', 'alert-circle');
@@ -647,15 +963,11 @@ function showToast(message, type = 'info') {
         toastIcon.setAttribute('data-lucide', 'info');
     }
     
-    lucide.createIcons(); // Update icons dynamically inside toast
-    
+    lucide.createIcons();
     toastEl.classList.remove('hidden');
     
-    // Auto-hide after 4 seconds
     clearTimeout(toastEl.timeoutId);
-    toastEl.timeoutId = setTimeout(() => {
-        toastEl.classList.add('hidden');
-    }, 4000);
+    toastEl.timeoutId = setTimeout(() => toastEl.classList.add('hidden'), 4000);
 }
 
 function createTransferRow(id, filename, size, direction) {
@@ -678,7 +990,6 @@ function createTransferRow(id, filename, size, direction) {
             </div>
         </div>
     `;
-    
     transfersList.insertAdjacentHTML('afterbegin', rowHtml);
 }
 
@@ -714,15 +1025,12 @@ function markTransferError(id) {
 }
 
 function triggerFileDownload(blob, filename) {
-    // Generate hidden download link in browser and click it
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
-    
-    // Cleanup
     setTimeout(() => {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
@@ -739,13 +1047,12 @@ function formatBytes(bytes, decimals = 2) {
 }
 
 function calculateSpeed(bytes, startTime) {
-    const duration = (Date.now() - startTime) / 1000; // seconds
+    const duration = (Date.now() - startTime) / 1000;
     if (duration === 0) return '0 KB/s';
-    const bps = bytes / duration; // Bytes per second
+    const bps = bytes / duration;
     return formatBytes(bps) + '/s';
 }
 
-// --- Setup Event Listeners ---
 function setupUI() {
     // Tab switching
     const tabs = document.querySelectorAll('.tab-btn');
@@ -759,6 +1066,10 @@ function setupUI() {
                 content.classList.remove('active');
             });
             document.getElementById(targetTab).classList.add('active');
+
+            if (targetTab === 'tab-explorer' && activeConnection) {
+                fetchRemoteExplorerPath(currentRemoteExplorerPath);
+            }
         });
     });
 
@@ -772,7 +1083,7 @@ function setupUI() {
         }
     });
 
-    // Toggle QR Code Code
+    // Toggle QR Code
     btnToggleQr.addEventListener('click', () => {
         qrWrapper.classList.toggle('hidden');
         if (qrWrapper.classList.contains('hidden')) {
@@ -783,64 +1094,97 @@ function setupUI() {
         lucide.createIcons();
     });
 
-    // Connect button click
-    btnConnect.addEventListener('click', connectToPeer);
-    
-    // Connect on Enter key
-    peerIdInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            connectToPeer();
-        }
-    });
-
-    // Disconnect button click
+    // Connect & Disconnect buttons
+    btnConnect.addEventListener('click', () => connectToPeer());
+    peerIdInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') connectToPeer(); });
     btnDisconnect.addEventListener('click', disconnectAll);
 
-    // Screen Share & Remote Control button events
-    btnShareScreen.addEventListener('click', startScreenShare);
-    btnStopShare.addEventListener('click', stopScreenShare);
-    if (btnToggleControl) {
-        btnToggleControl.addEventListener('click', toggleRemoteControl);
-    }
-    if (btnToggleFullscreen) {
-        btnToggleFullscreen.addEventListener('click', toggleFullscreen);
-    }
-    if (btnExitFullscreen) {
-        btnExitFullscreen.addEventListener('click', toggleFullscreen);
+    // Save current active connection
+    if (btnSaveCurrent) {
+        btnSaveCurrent.addEventListener('click', () => {
+            if (!activeConnection) return;
+            const alias = prompt("Introduce un nombre o alias para este dispositivo:", `PC Remota ${activeConnection.peer}`);
+            if (alias) {
+                saveDeviceToHistory(activeConnection.peer, alias.trim());
+                showToast("Dispositivo guardado en tu historial.", "success");
+            }
+        });
     }
 
-    // Listen for fullscreen change state
+    // Remote File Explorer Buttons
+    if (btnExplorerGo) {
+        btnExplorerGo.addEventListener('click', () => fetchRemoteExplorerPath(explorerPathInput.value.trim()));
+        explorerPathInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') fetchRemoteExplorerPath(explorerPathInput.value.trim());
+        });
+    }
+
+    if (btnExplorerUp) {
+        btnExplorerUp.addEventListener('click', () => {
+            fetchRemoteExplorerPath(currentRemoteExplorerPath + "\\..");
+        });
+    }
+
+    if (btnExplorerRefresh) {
+        btnExplorerRefresh.addEventListener('click', () => fetchRemoteExplorerPath(currentRemoteExplorerPath));
+    }
+
+    if (btnExplorerMkdir) {
+        btnExplorerMkdir.addEventListener('click', createRemoteFolder);
+    }
+
+    if (btnExplorerUpload && explorerFilePicker) {
+        btnExplorerUpload.addEventListener('click', () => explorerFilePicker.click());
+        explorerFilePicker.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                uploadFileToRemoteFolder(e.target.files[0]);
+            }
+        });
+    }
+
+    // Screen Share & Remote Control buttons
+    btnShareScreen.addEventListener('click', startScreenShare);
+    btnStopShare.addEventListener('click', stopScreenShare);
+    if (btnToggleControl) btnToggleControl.addEventListener('click', toggleRemoteControl);
+    if (btnToggleFullscreen) btnToggleFullscreen.addEventListener('click', toggleFullscreen);
+    if (btnExitFullscreen) btnExitFullscreen.addEventListener('click', toggleFullscreen);
+
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
 
-    // Remote Control & Fullscreen input listeners on video element
+    // Mouse & Keyboard events on remote video element
     if (remoteVideo) {
         remoteVideo.addEventListener('mousemove', (e) => sendRemoteMouseEvent(e, 'mousemove'));
         remoteVideo.addEventListener('mousedown', (e) => sendRemoteMouseEvent(e, 'mousedown'));
         remoteVideo.addEventListener('mouseup', (e) => sendRemoteMouseEvent(e, 'mouseup'));
         remoteVideo.addEventListener('click', (e) => sendRemoteMouseEvent(e, 'click'));
-        remoteVideo.addEventListener('dblclick', toggleFullscreen);
+        remoteVideo.addEventListener('dblclick', (e) => sendRemoteMouseEvent(e, 'dblclick'));
+        remoteVideo.addEventListener('wheel', (e) => sendRemoteMouseEvent(e, 'wheel'));
         remoteVideo.addEventListener('contextmenu', (e) => {
             if (isRemoteControlActive) e.preventDefault();
             sendRemoteMouseEvent(e, 'contextmenu');
         });
-        remoteVideo.addEventListener('keydown', (e) => sendRemoteKeyEvent(e, 'keydown'));
-        remoteVideo.addEventListener('keyup', (e) => sendRemoteKeyEvent(e, 'keyup'));
     }
 
-    // Drag and Drop files zone events
+    // Global Key Listening when remote control is active
+    window.addEventListener('keydown', (e) => {
+        if (isRemoteControlActive) sendRemoteKeyEvent(e, 'keydown');
+    });
+    window.addEventListener('keyup', (e) => {
+        if (isRemoteControlActive) sendRemoteKeyEvent(e, 'keyup');
+    });
+
+    // P2P File Drop Zone
     fileDropZone.addEventListener('click', () => {
         if (!activeConnection) {
-            showToast("Primero conéctate a una PC para poder enviar archivos.", "error");
+            showToast("Primero conéctate a una PC para enviar archivos.", "error");
             return;
         }
         fileInput.click();
     });
 
     fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            handleFileSend(e.target.files);
-        }
+        if (e.target.files.length > 0) handleFileSend(e.target.files);
     });
 
     fileDropZone.addEventListener('dragover', (e) => {
@@ -848,19 +1192,15 @@ function setupUI() {
         fileDropZone.classList.add('dragover');
     });
 
-    fileDropZone.addEventListener('dragleave', () => {
-        fileDropZone.classList.remove('dragover');
-    });
+    fileDropZone.addEventListener('dragleave', () => fileDropZone.classList.remove('dragover'));
 
     fileDropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         fileDropZone.classList.remove('dragover');
         if (!activeConnection) {
-            showToast("Primero conéctate a una PC para poder enviar archivos.", "error");
+            showToast("Primero conéctate a una PC para enviar archivos.", "error");
             return;
         }
-        if (e.dataTransfer.files.length > 0) {
-            handleFileSend(e.dataTransfer.files);
-        }
+        if (e.dataTransfer.files.length > 0) handleFileSend(e.dataTransfer.files);
     });
 }
