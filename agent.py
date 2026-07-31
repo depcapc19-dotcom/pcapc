@@ -6,6 +6,7 @@ import shutil
 import base64
 import time
 import string
+import subprocess
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse, unquote
 
@@ -214,7 +215,93 @@ class PegasoAgentHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": f"Error al guardar archivo: {str(e)}"}, 500)
             return
 
+        # 6. Atajos Rápidos de Sistema (Lock, TaskMgr, Ctrl+Alt+Del, etc.)
+        elif parsed_path == '/system/action':
+            result = self.execute_system_action(msg)
+            self.send_json(result)
+            return
+
+        # 7. Consola Remota de Comandos (PowerShell / CMD)
+        elif parsed_path == '/system/command':
+            result = self.execute_system_command(msg)
+            self.send_json(result)
+            return
+
+        # 8. Sincronización de Portapapeles (Clipboard)
+        elif parsed_path == '/system/clipboard':
+            result = self.handle_clipboard(msg)
+            self.send_json(result)
+            return
+
         self.send_json({"error": "Acción no válida"}, 400)
+
+    def execute_system_action(self, msg):
+        cmd = msg.get('cmd', '')
+        if cmd == 'lock_screen':
+            user32.LockWorkStation()
+            return {"status": "success", "message": "Estación de trabajo bloqueada"}
+        elif cmd == 'show_desktop':
+            user32.keybd_event(0x5B, 0, 0, 0)
+            user32.keybd_event(0x44, 0, 0, 0)
+            user32.keybd_event(0x44, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(0x5B, 0, KEYEVENTF_KEYUP, 0)
+            return {"status": "success", "message": "Escritorio mostrado"}
+        elif cmd == 'taskmgr':
+            subprocess.Popen(['taskmgr.exe'])
+            return {"status": "success", "message": "Administrador de tareas abierto"}
+        elif cmd == 'start_menu':
+            user32.keybd_event(0x5B, 0, 0, 0)
+            user32.keybd_event(0x5B, 0, KEYEVENTF_KEYUP, 0)
+            return {"status": "success", "message": "Menú Inicio activado"}
+        elif cmd == 'ctrl_alt_del':
+            try:
+                subprocess.Popen(['taskmgr.exe'])
+            except Exception:
+                pass
+            return {"status": "success", "message": "Atajo de seguridad ejecutado (TaskManager)"}
+        return {"error": "Acción no reconocida"}
+
+    def execute_system_command(self, msg):
+        command = msg.get('command', '').strip()
+        shell_type = msg.get('shell', 'powershell').lower()
+
+        if not command:
+            return {"error": "Comando vacío"}
+
+        try:
+            if shell_type == 'cmd':
+                cmd_args = ['cmd.exe', '/c', command]
+            else:
+                cmd_args = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command]
+
+            proc = subprocess.run(cmd_args, capture_output=True, text=True, timeout=20)
+            return {
+                "status": "success",
+                "stdout": proc.stdout or "",
+                "stderr": proc.stderr or "",
+                "exitCode": proc.returncode
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": "El comando excedió el tiempo máximo de espera (20s)"}
+        except Exception as e:
+            return {"error": f"Error al ejecutar comando: {str(e)}"}
+
+    def handle_clipboard(self, msg):
+        action = msg.get('action', 'get')
+        if action == 'set':
+            text = msg.get('text', '')
+            try:
+                safe_text = text.replace('"', '`"')
+                subprocess.run(['powershell.exe', '-NoProfile', '-Command', f'Set-Clipboard -Value "{safe_text}"'], timeout=5)
+                return {"status": "success", "message": "Portapapeles remoto actualizado"}
+            except Exception as e:
+                return {"error": f"Error al escribir portapapeles: {str(e)}"}
+        else:
+            try:
+                proc = subprocess.run(['powershell.exe', '-NoProfile', '-Command', 'Get-Clipboard'], capture_output=True, text=True, timeout=5)
+                return {"status": "success", "text": proc.stdout.strip()}
+            except Exception as e:
+                return {"error": f"Error al leer portapapeles: {str(e)}"}
 
     def execute_control_action(self, msg):
         action = msg.get('action')
