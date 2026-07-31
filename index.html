@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pegaso - De PC a PC</title>
+    <title>Pegaso - Control Remoto & Soporte PC a PC</title>
     <!-- Google Fonts: Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
-    <!-- Lucide Icons for premium look -->
+    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -27,7 +27,7 @@
                 </div>
                 <div>
                     <h1>PEGASO</h1>
-                    <p class="subtitle">De PC a PC • Conexión Directa</p>
+                    <p class="subtitle">Soporte y Control Remoto • De PC a PC</p>
                 </div>
             </div>
             <div class="connection-badge status-offline" id="global-status-badge">
@@ -38,7 +38,7 @@
 
         <!-- Main Grid Layout -->
         <div class="app-grid">
-            <!-- Left Sidebar: Configuration & Connection -->
+            <!-- Left Sidebar: Configuration & Connection & Saved Devices -->
             <section class="sidebar">
                 <!-- ID Card -->
                 <div class="glass-card id-card">
@@ -62,6 +62,20 @@
                         </div>
                         <p class="qr-info">Escanea este código desde tu celular para conectarte rápido.</p>
                     </div>
+                </div>
+
+                <!-- Download Agent Card (Para GitHub Pages) -->
+                <div class="glass-card download-agent-card">
+                    <div class="download-agent-header">
+                        <i data-lucide="shield-check" class="agent-icon"></i>
+                        <div>
+                            <h3>Permitir Control Remoto</h3>
+                            <p class="agent-desc">Para que puedan mover tu mouse, usar teclado y ver tus archivos:</p>
+                        </div>
+                    </div>
+                    <a href="iniciar-control-windows.bat" download="iniciar-control-windows.bat" class="btn btn-accent btn-block btn-download-agent">
+                        <i data-lucide="download"></i> Descargar Agente Windows (.bat)
+                    </a>
                 </div>
 
                 <!-- Connect to Remote Card -->
@@ -89,17 +103,33 @@
                         <i data-lucide="power"></i> Desconectar
                     </button>
                 </div>
+
+                <!-- Saved Devices / History Card ("Guardar información") -->
+                <div class="glass-card saved-devices-card">
+                    <div class="card-header-flex">
+                        <h3><i data-lucide="bookmark" class="small-header-icon"></i> Dispositivos Guardados</h3>
+                        <button class="icon-btn-sm" id="btn-save-current" title="Guardar dispositivo actual" style="display:none;">
+                            <i data-lucide="plus-circle"></i>
+                        </button>
+                    </div>
+                    <div class="saved-devices-list" id="saved-devices-list">
+                        <p class="empty-saved-msg" id="empty-saved-msg">No hay dispositivos guardados aún.</p>
+                    </div>
+                </div>
             </section>
 
             <!-- Right Workspace: Operations & Media -->
             <section class="workspace">
                 <!-- Tab Menu (Disabled until connected) -->
                 <div class="tabs-container locked" id="workspace-tabs">
-                    <button class="tab-btn active" data-tab="tab-files">
-                        <i data-lucide="folder-open"></i> Transferencia de Archivos
+                    <button class="tab-btn active" data-tab="tab-screen">
+                        <i data-lucide="monitor"></i> Control Remoto
                     </button>
-                    <button class="tab-btn" data-tab="tab-screen">
-                        <i data-lucide="monitor"></i> Compartir Pantalla
+                    <button class="tab-btn" data-tab="tab-explorer">
+                        <i data-lucide="folder-tree"></i> Archivos Remotos (AnyDesk)
+                    </button>
+                    <button class="tab-btn" data-tab="tab-files">
+                        <i data-lucide="send"></i> Envío P2P
                     </button>
                     <div class="tabs-lock-overlay" id="tabs-overlay">
                         <i data-lucide="lock"></i>
@@ -107,34 +137,8 @@
                     </div>
                 </div>
 
-                <!-- Tab Content: Files -->
-                <div class="tab-content active" id="tab-files">
-                    <div class="glass-card full-height">
-                        <div class="drop-zone" id="file-drop-zone">
-                            <div class="drop-zone-content">
-                                <i data-lucide="upload-cloud" class="upload-icon"></i>
-                                <h3>Arrastra tus archivos aquí</h3>
-                                <p>O haz clic para explorar tu equipo</p>
-                                <input type="file" id="file-input" class="hidden-file-input" multiple>
-                            </div>
-                        </div>
-
-                        <!-- Transfer Progress Section -->
-                        <div class="transfers-section">
-                            <h3>Transferencias Activas</h3>
-                            <div class="transfers-list" id="transfers-list">
-                                <div class="empty-state" id="no-transfers-msg">
-                                    <i data-lucide="arrow-left-right"></i>
-                                    <p>No hay transferencias activas. Conéctate y envía un archivo para comenzar.</p>
-                                </div>
-                                <!-- Dynamically added transfers will go here -->
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Tab Content: Screen Sharing -->
-                <div class="tab-content" id="tab-screen">
+                <!-- Tab Content: Screen Sharing & Remote Control -->
+                <div class="tab-content active" id="tab-screen">
                     <div class="glass-card full-height screen-workspace">
                         <div class="screen-controls">
                             <div class="screen-controls-group">
@@ -156,6 +160,10 @@
                                 <span class="control-badge hidden" id="control-badge">Control Activo</span>
                             </div>
                         </div>
+                        <p class="card-info remote-os-hint" style="margin-top: -6px; font-size: 11px;">
+                            <i data-lucide="shield-alert" style="width: 13px; height: 13px; vertical-align: middle;"></i> 
+                            Para mover mouse/teclado real y explorar archivos, ejecuta <strong>iniciar-control-windows.bat</strong> en la PC remota.
+                        </p>
 
                         <div class="video-container" id="video-container">
                             <!-- Floating fullscreen exit control bar -->
@@ -170,10 +178,90 @@
                                 <i data-lucide="monitor" class="placeholder-icon animate-pulse"></i>
                                 <p>La transmisión de pantalla aparecerá aquí cuando comience.</p>
                             </div>
-                            <video id="remote-video" autoplay playsinline tabindex="0" title="Doble clic para pantalla completa"></video>
+                            <video id="remote-video" autoplay playsinline tabindex="0" title="Haz clic para enfocar teclado. Doble clic para pantalla completa"></video>
                             <div class="remote-cursor hidden" id="remote-cursor">
                                 <i data-lucide="mouse-pointer" class="cursor-icon"></i>
                                 <span class="cursor-label" id="remote-cursor-label">Remoto</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Remote File Explorer (AnyDesk style) -->
+                <div class="tab-content" id="tab-explorer">
+                    <div class="glass-card full-height explorer-workspace">
+                        <!-- Navigation Bar -->
+                        <div class="explorer-toolbar">
+                            <button class="btn btn-icon-only" id="btn-explorer-up" title="Carpeta Superior">
+                                <i data-lucide="arrow-up"></i>
+                            </button>
+                            <button class="btn btn-icon-only" id="btn-explorer-refresh" title="Actualizar contenido">
+                                <i data-lucide="refresh-cw"></i>
+                            </button>
+                            <div class="explorer-path-box">
+                                <i data-lucide="folder" class="path-icon"></i>
+                                <input type="text" id="explorer-path-input" value="ROOT" placeholder="Escribe ruta nativa (ej. C:\)">
+                                <button class="btn btn-sm btn-secondary" id="btn-explorer-go">Ir</button>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" id="btn-explorer-mkdir">
+                                <i data-lucide="folder-plus"></i> Nueva Carpeta
+                            </button>
+                            <button class="btn btn-primary btn-sm" id="btn-explorer-upload">
+                                <i data-lucide="upload"></i> Subir Archivo
+                            </button>
+                            <input type="file" id="explorer-file-picker" class="hidden">
+                        </div>
+
+                        <!-- Quick Access Drives / Shortcuts Bar -->
+                        <div class="quick-access-bar" id="explorer-quick-access">
+                            <!-- Populated dynamically via JS -->
+                        </div>
+
+                        <!-- Files Table / Explorer View -->
+                        <div class="explorer-table-container">
+                            <table class="explorer-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 40px;"></th>
+                                        <th>Nombre</th>
+                                        <th style="width: 120px;">Tamaño</th>
+                                        <th style="width: 150px;">Modificado</th>
+                                        <th style="width: 140px; text-align: right;">Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="explorer-files-list">
+                                    <tr>
+                                        <td colspan="5" class="explorer-loading-state">
+                                            <i data-lucide="loader-2" class="spin-icon"></i>
+                                            <span>Conectando con el Agente Nativo de la PC remota...</span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: P2P Direct Files -->
+                <div class="tab-content" id="tab-files">
+                    <div class="glass-card full-height">
+                        <div class="drop-zone" id="file-drop-zone">
+                            <div class="drop-zone-content">
+                                <i data-lucide="upload-cloud" class="upload-icon"></i>
+                                <h3>Arrastra tus archivos aquí para envío directo P2P</h3>
+                                <p>O haz clic para explorar tu equipo local</p>
+                                <input type="file" id="file-input" class="hidden-file-input" multiple>
+                            </div>
+                        </div>
+
+                        <!-- Transfer Progress Section -->
+                        <div class="transfers-section">
+                            <h3>Transferencias Activas</h3>
+                            <div class="transfers-list" id="transfers-list">
+                                <div class="empty-state" id="no-transfers-msg">
+                                    <i data-lucide="arrow-left-right"></i>
+                                    <p>No hay transferencias activas.</p>
+                                </div>
                             </div>
                         </div>
                     </div>
