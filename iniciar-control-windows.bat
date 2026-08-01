@@ -10,6 +10,19 @@ echo  [+] Teclado Nativo Completo (Teclas de Funcion, Atajos, Caracteres)
 echo  [+] Explorador Remoto de Archivos (Subir, Descargar, Crear, Borrar)
 echo.
 
+
+:: Verificar y Configurar Auto-inicio con Windows (Startup)
+set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+set "SHORTCUT_PATH=%STARTUP_FOLDER%\PegasoAgent.lnk"
+if not exist "%SHORTCUT_PATH%" (
+    echo  [*] Configurando Auto-inicio en Windows para automatizar conexiones futuras...
+    powershell -Command "$wsh = New-Object -ComObject WScript.Shell; $shortcut = $wsh.CreateShortcut('%SHORTCUT_PATH%'); $shortcut.TargetPath = '%~f0'; $shortcut.WorkingDirectory = '%~dp0'; $shortcut.WindowStyle = 7; $shortcut.Save()" 2>nul
+    if exist "%SHORTCUT_PATH%" (
+        echo  [+] Auto-inicio activado en Windows Startup con exito.
+    )
+    echo.
+)
+
 if not exist "%~dp0agent.py" (
     echo  [!] No se encontro 'agent.py' localmente.
     echo  Descargando componente nativo desde el servidor GitHub...
