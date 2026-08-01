@@ -782,6 +782,33 @@ function renderSavedDevices() {
     lucide.createIcons();
 }
 
+// --- Native Windows Agent Helper Functions ---
+async function checkNativeAgentStatus() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1200);
+
+    try {
+        const response = await fetch('http://localhost:9999/status', { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (response.ok) {
+            const data = await response.json();
+            return data.status === 'active';
+        }
+    } catch (err) {
+        clearTimeout(timeoutId);
+    }
+    return false;
+}
+
+function triggerAgentBatDownload() {
+    const a = document.createElement('a');
+    a.href = 'iniciar-control-windows.bat';
+    a.download = 'iniciar-control-windows.bat';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
 // --- Screen Sharing Logic ---
 async function startScreenShare() {
     if (!activeConnection) {
@@ -799,6 +826,28 @@ async function startScreenShare() {
         btnStopShare.classList.remove('hidden');
         screenStatusText.innerText = "Transmitiendo pantalla...";
         showToast("Compartiendo tu pantalla...", "success");
+
+        // --- Verificación y Descarga Automatizada del Agente Bat Nativo ---
+        const isAgentRunning = await checkNativeAgentStatus();
+        const nativeBadge = document.getElementById('native-agent-badge');
+        const nativeBadgeText = document.getElementById('native-agent-status-text');
+
+        if (isAgentRunning) {
+            if (nativeBadge) {
+                nativeBadge.classList.remove('hidden', 'offline');
+                if (nativeBadgeText) nativeBadgeText.innerText = "Agente Activo";
+            }
+            showToast("⚡ Agente Nativo Windows detectado y activo (localhost:9999).", "success");
+        } else {
+            if (nativeBadge) {
+                nativeBadge.classList.remove('hidden');
+                nativeBadge.classList.add('offline');
+                if (nativeBadgeText) nativeBadgeText.innerText = "Agente Pendiente";
+            }
+            // Disparar descarga automática del .bat
+            triggerAgentBatDownload();
+            showToast("📥 Descargando 'iniciar-control-windows.bat' automáticamente. Haz clic en el archivo para activar el control de mouse/teclado.", "warning", 8000);
+        }
 
         localStream.getVideoTracks()[0].onended = () => stopScreenShare();
 
@@ -1301,7 +1350,7 @@ function checkAutoConnect() {
     }
 }
 
-function showToast(message, type = 'info') {
+function showToast(message, type = 'info', duration = 4000) {
     toastMessage.innerText = message;
     toastEl.className = 'toast';
     
@@ -1311,6 +1360,9 @@ function showToast(message, type = 'info') {
     } else if (type === 'success') {
         toastEl.classList.add('toast-success');
         toastIcon.setAttribute('data-lucide', 'check-circle2');
+    } else if (type === 'warning') {
+        toastEl.classList.add('toast-warning');
+        toastIcon.setAttribute('data-lucide', 'alert-triangle');
     } else {
         toastIcon.setAttribute('data-lucide', 'info');
     }
@@ -1319,7 +1371,7 @@ function showToast(message, type = 'info') {
     toastEl.classList.remove('hidden');
     
     clearTimeout(toastEl.timeoutId);
-    toastEl.timeoutId = setTimeout(() => toastEl.classList.add('hidden'), 4000);
+    toastEl.timeoutId = setTimeout(() => toastEl.classList.add('hidden'), duration);
 }
 
 function createTransferRow(id, filename, size, direction) {
