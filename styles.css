@@ -715,6 +715,25 @@ h1 {
     animation: pulseAnim 2s infinite;
 }
 
+.agent-status-badge {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.agent-status-badge.offline {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.3);
+}
+
 .btn-sm {
     padding: 6px 12px;
     font-size: 12px;
@@ -869,6 +888,10 @@ h1 {
 
 .toast.toast-success {
     border-left-color: var(--success);
+}
+
+.toast.toast-warning {
+    border-left-color: #f59e0b;
 }
 
 .toast-icon {
